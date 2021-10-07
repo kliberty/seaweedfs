@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,11 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/stats"
 	"github.com/chrislusf/seaweedfs/weed/util"
 )
+
+func MakeThumbPath(etag string) (path util.FullPath) {
+	x := fmt.Sprintf("/.seaweed-resize-cache/%c/%c/%s", etag[0], etag[1], etag)
+	return util.FullPath(x)
+}
 
 func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) {
 
@@ -150,6 +156,16 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 		}
 		width, height, mode, shouldResize := shouldResizeImages(ext, r)
 		if shouldResize {
+			resizePath := MakeThumbPath(etag)
+			resizeEntry, err := fs.filer.FindEntry(context.Background(), resizePath)
+			if err == nil {
+				data, err := filer.ReadAll(fs.filer.MasterClient, resizeEntry.Chunks)
+				if err == nil {
+					io.Copy(w, bytes.NewReader(data))
+					return
+				}
+			}
+
 			data, err := filer.ReadAll(fs.filer.MasterClient, entry.Chunks)
 			if err != nil {
 				glog.Errorf("failed to read %s: %v", path, err)
@@ -158,6 +174,45 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 			}
 			rs, _, _ := images.Resized(ext, bytes.NewReader(data), width, height, mode)
 			io.Copy(w, rs)
+
+			query := r.URL.Query()
+			ttl := query.Get("ttl")
+			if ttl == "" {
+				return
+			}
+			so, err := fs.detectStorageOption0(r.RequestURI,
+				query.Get("collection"),
+				query.Get("replication"),
+				// query.Get("ttl"),
+				ttl,
+				query.Get("disk"),
+				query.Get("dataCenter"),
+				query.Get("rack"),
+			)
+			if err != nil {
+				if err == ErrReadOnly {
+					w.WriteHeader(http.StatusInsufficientStorage)
+				} else {
+					glog.V(1).Infof("post", r.RequestURI, ":", err.Error())
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+				return
+			}
+
+			end, _ := rs.Seek(0, io.SeekEnd)
+			rs.Seek(0, io.SeekStart)
+			rHeader := http.Header{}
+			rHeader.Set("Content-Type", mimeType)
+			fakeurl := url.URL{
+				Path: string(MakeThumbPath(etag)),
+			}
+			newr := http.Request{
+				Method: "PUT",
+				Header: rHeader,
+				URL:    &fakeurl,
+				Body:   io.NopCloser(rs),
+			}
+			fs.autoChunk(context.Background(), httptest.NewRecorder(), &newr, end, so)
 			return
 		}
 	}
