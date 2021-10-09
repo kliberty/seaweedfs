@@ -23,8 +23,8 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/util"
 )
 
-func MakeThumbPath(etag string) (path util.FullPath) {
-	x := fmt.Sprintf("/.seaweed-resize-cache/%c/%c/%s", etag[0], etag[1], etag)
+func MakeThumbPath(etag string, width int, height int) (path util.FullPath) {
+	x := fmt.Sprintf("/.seaweed-resize-cache/%b/%b/%s-%dx%d", etag[0], etag[1], etag, width, height)
 	return util.FullPath(x)
 }
 
@@ -156,7 +156,7 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 		}
 		width, height, mode, shouldResize := shouldResizeImages(ext, r)
 		if shouldResize {
-			resizePath := MakeThumbPath(etag)
+			resizePath := MakeThumbPath(etag, width, height)
 			resizeEntry, err := fs.filer.FindEntry(context.Background(), resizePath)
 			if err == nil {
 				data, err := filer.ReadAll(fs.filer.MasterClient, resizeEntry.Chunks)
@@ -204,7 +204,7 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 			rHeader := http.Header{}
 			rHeader.Set("Content-Type", mimeType)
 			fakeurl := url.URL{
-				Path: string(MakeThumbPath(etag)),
+				Path: string(resizePath),
 			}
 			newr := http.Request{
 				Method: "PUT",
