@@ -24,7 +24,7 @@ import (
 )
 
 func MakeThumbPath(etag string, width int, height int) (path util.FullPath) {
-	x := fmt.Sprintf("/.seaweed-resize-cache/%b/%b/%s-%dx%d", etag[0], etag[1], etag, width, height)
+	x := fmt.Sprintf("/.seaweed-resize-cache/%c/%c/%s-%dx%d", etag[0], etag[1], etag, width, height)
 	return util.FullPath(x)
 }
 
@@ -177,11 +177,12 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 
 			query := r.URL.Query()
 			ttl := query.Get("ttl")
-			if ttl == "" {
+			shouldCache := query.Get("cache-image") != ""
+			if ttl == "" && !shouldCache {
 				return
 			}
 			so, err := fs.detectStorageOption0(r.RequestURI,
-				query.Get("collection"),
+				"seaweed-image-cache",
 				query.Get("replication"),
 				// query.Get("ttl"),
 				ttl,
