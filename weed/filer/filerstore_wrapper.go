@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/viant/ptrie"
+	"math"
 	"strings"
 	"time"
 
@@ -248,14 +249,18 @@ func (fsw *FilerStoreWrapper) ListDirectoryPrefixedEntries(ctx context.Context, 
 	defer func() {
 		stats.FilerStoreHistogram.WithLabelValues(actualStore.GetName(), "prefixList").Observe(time.Since(start).Seconds())
 	}()
+	if limit > math.MaxInt32-1 {
+		limit = math.MaxInt32 - 1
+	}
 	glog.V(4).Infof("ListDirectoryPrefixedEntries %s from %s prefix %s limit %d", dirPath, startFileName, prefix, limit)
-	lastFileName, err = actualStore.ListDirectoryPrefixedEntries(ctx, dirPath, startFileName, includeStartFile, limit, prefix, eachEntryFunc)
+	adjustedEntryFunc := func(entry *Entry) bool {
+		fsw.maybeReadHardLink(ctx, entry)
+		filer_pb.AfterEntryDeserialization(entry.Chunks)
+		return eachEntryFunc(entry)
+	}
+	lastFileName, err = actualStore.ListDirectoryPrefixedEntries(ctx, dirPath, startFileName, includeStartFile, limit, prefix, adjustedEntryFunc)
 	if err == ErrUnsupportedListDirectoryPrefixed {
-		lastFileName, err = fsw.prefixFilterEntries(ctx, dirPath, startFileName, includeStartFile, limit, prefix, func(entry *Entry) bool {
-			fsw.maybeReadHardLink(ctx, entry)
-			filer_pb.AfterEntryDeserialization(entry.Chunks)
-			return eachEntryFunc(entry)
-		})
+		lastFileName, err = fsw.prefixFilterEntries(ctx, dirPath, startFileName, includeStartFile, limit, prefix, adjustedEntryFunc)
 	}
 	return lastFileName, err
 }
@@ -291,7 +296,7 @@ func (fsw *FilerStoreWrapper) prefixFilterEntries(ctx context.Context, dirPath u
 		}
 		if count < limit {
 			notPrefixed = notPrefixed[:0]
-			_, err = actualStore.ListDirectoryEntries(ctx, dirPath, lastFileName, false, limit, func(entry *Entry) bool {
+			lastFileName, err = actualStore.ListDirectoryEntries(ctx, dirPath, lastFileName, false, limit, func(entry *Entry) bool {
 				notPrefixed = append(notPrefixed, entry)
 				return true
 			})

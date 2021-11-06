@@ -6,7 +6,6 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/storage/backend"
 	"github.com/chrislusf/seaweedfs/weed/util"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/chrislusf/raft"
@@ -195,12 +194,16 @@ func (ms *MasterServer) KeepConnected(stream master_pb.Seaweed_KeepConnectedServ
 	// buffer by 1 so we don't end up getting stuck writing to stopChan forever
 	stopChan := make(chan bool, 1)
 
-	clientName, messageChan := ms.addClient(req.Name, peerAddress)
+	clientName, messageChan := ms.addClient(req.ClientType, peerAddress)
+	ms.Cluster.AddClusterNode(req.ClientType, peerAddress, req.Version)
 
-	defer ms.deleteClient(clientName)
+	defer func() {
+		ms.Cluster.RemoveClusterNode(req.ClientType, peerAddress)
+		ms.deleteClient(clientName)
+	}()
 
 	for _, message := range ms.Topo.ToVolumeLocations() {
-		if sendErr := stream.Send(message); sendErr != nil {
+		if sendErr := stream.Send(&master_pb.KeepConnectedResponse{VolumeLocation: message}); sendErr != nil {
 			return sendErr
 		}
 	}
@@ -220,7 +223,7 @@ func (ms *MasterServer) KeepConnected(stream master_pb.Seaweed_KeepConnectedServ
 	for {
 		select {
 		case message := <-messageChan:
-			if err := stream.Send(message); err != nil {
+			if err := stream.Send(&master_pb.KeepConnectedResponse{VolumeLocation: message}); err != nil {
 				glog.V(0).Infof("=> client %v: %+v", clientName, message)
 				return err
 			}
@@ -241,8 +244,10 @@ func (ms *MasterServer) informNewLeader(stream master_pb.Seaweed_KeepConnectedSe
 		glog.Errorf("topo leader: %v", err)
 		return raft.NotLeaderError
 	}
-	if err := stream.Send(&master_pb.VolumeLocation{
-		Leader: string(leader),
+	if err := stream.Send(&master_pb.KeepConnectedResponse{
+		VolumeLocation: &master_pb.VolumeLocation{
+			Leader: string(leader),
+		},
 	}); err != nil {
 		return err
 	}
@@ -293,19 +298,6 @@ func findClientAddress(ctx context.Context, grpcPort uint32) string {
 	}
 	return pr.Addr.String()
 
-}
-
-func (ms *MasterServer) ListMasterClients(ctx context.Context, req *master_pb.ListMasterClientsRequest) (*master_pb.ListMasterClientsResponse, error) {
-	resp := &master_pb.ListMasterClientsResponse{}
-	ms.clientChansLock.RLock()
-	defer ms.clientChansLock.RUnlock()
-
-	for k := range ms.clientChans {
-		if strings.HasPrefix(k, req.ClientType+"@") {
-			resp.GrpcAddresses = append(resp.GrpcAddresses, k[len(req.ClientType)+1:])
-		}
-	}
-	return resp, nil
 }
 
 func (ms *MasterServer) GetMasterConfiguration(ctx context.Context, req *master_pb.GetMasterConfigurationRequest) (*master_pb.GetMasterConfigurationResponse, error) {

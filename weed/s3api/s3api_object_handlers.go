@@ -1,19 +1,20 @@
 package s3api
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/pquerna/cachecontrol/cacheobject"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/pquerna/cachecontrol/cacheobject"
 
 	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
 
@@ -36,6 +37,16 @@ func init() {
 	}}
 }
 
+func mimeDetect(r *http.Request, dataReader io.Reader) io.ReadCloser {
+	mimeBuffer := make([]byte, 512)
+	size, _ := dataReader.Read(mimeBuffer)
+	if size > 0 {
+		r.Header.Set("Content-Type", http.DetectContentType(mimeBuffer[:size]))
+		return io.NopCloser(io.MultiReader(bytes.NewReader(mimeBuffer[:size]), dataReader))
+	}
+	return io.NopCloser(dataReader)
+}
+
 func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	// http://docs.aws.amazon.com/AmazonS3/latest/dev/UploadingObjects.html
@@ -45,20 +56,20 @@ func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request)
 
 	_, err := validateContentMd5(r.Header)
 	if err != nil {
-		s3err.WriteErrorResponse(w, s3err.ErrInvalidDigest, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidDigest)
 		return
 	}
 
 	if r.Header.Get("Cache-Control") != "" {
 		if _, err = cacheobject.ParseRequestCacheControl(r.Header.Get("Cache-Control")); err != nil {
-			s3err.WriteErrorResponse(w, s3err.ErrInvalidDigest, r)
+			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidDigest)
 			return
 		}
 	}
 
 	if r.Header.Get("Expires") != "" {
 		if _, err = time.Parse(http.TimeFormat, r.Header.Get("Expires")); err != nil {
-			s3err.WriteErrorResponse(w, s3err.ErrInvalidDigest, r)
+			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidDigest)
 			return
 		}
 	}
@@ -76,12 +87,12 @@ func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request)
 			_, s3ErrCode = s3a.iam.reqSignatureV4Verify(r)
 		}
 		if s3ErrCode != s3err.ErrNone {
-			s3err.WriteErrorResponse(w, s3ErrCode, r)
+			s3err.WriteErrorResponse(w, r, s3ErrCode)
 			return
 		}
 	} else {
 		if authTypeStreamingSigned == rAuthType {
-			s3err.WriteErrorResponse(w, s3err.ErrAuthNotSetup, r)
+			s3err.WriteErrorResponse(w, r, s3err.ErrAuthNotSetup)
 			return
 		}
 	}
@@ -89,23 +100,27 @@ func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request)
 
 	if strings.HasSuffix(object, "/") {
 		if err := s3a.mkdir(s3a.option.BucketsPath, bucket+object, nil); err != nil {
-			s3err.WriteErrorResponse(w, s3err.ErrInternalError, r)
+			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 			return
 		}
 	} else {
 		uploadUrl := fmt.Sprintf("http://%s%s/%s%s", s3a.option.Filer.ToHttpAddress(), s3a.option.BucketsPath, bucket, urlPathEscape(object))
 
+		if r.Header.Get("Content-Type") == "" {
+			dataReader = mimeDetect(r, dataReader)
+		}
+
 		etag, errCode := s3a.putToFiler(r, uploadUrl, dataReader)
 
 		if errCode != s3err.ErrNone {
-			s3err.WriteErrorResponse(w, errCode, r)
+			s3err.WriteErrorResponse(w, r, errCode)
 			return
 		}
 
 		setEtag(w, etag)
 	}
 
-	writeSuccessResponseEmpty(w)
+	writeSuccessResponseEmpty(w, r)
 }
 
 func urlPathEscape(object string) string {
@@ -122,7 +137,7 @@ func (s3a *S3ApiServer) GetObjectHandler(w http.ResponseWriter, r *http.Request)
 	glog.V(3).Infof("GetObjectHandler %s %s", bucket, object)
 
 	if strings.HasSuffix(r.URL.Path, "/") {
-		s3err.WriteErrorResponse(w, s3err.ErrNotImplemented, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrNotImplemented)
 		return
 	}
 
@@ -198,15 +213,15 @@ func (s3a *S3ApiServer) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *h
 	bucket, _ := getBucketAndObject(r)
 	glog.V(3).Infof("DeleteMultipleObjectsHandler %s", bucket)
 
-	deleteXMLBytes, err := ioutil.ReadAll(r.Body)
+	deleteXMLBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		s3err.WriteErrorResponse(w, s3err.ErrInternalError, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 		return
 	}
 
 	deleteObjects := &DeleteObjectsRequest{}
 	if err := xml.Unmarshal(deleteXMLBytes, deleteObjects); err != nil {
-		s3err.WriteErrorResponse(w, s3err.ErrMalformedXML, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
 		return
 	}
 
@@ -258,7 +273,7 @@ func (s3a *S3ApiServer) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *h
 	}
 	deleteResp.Errors = deleteErrors
 
-	writeSuccessResponseXML(w, deleteResp)
+	writeSuccessResponseXML(w, r, deleteResp)
 
 }
 
@@ -302,7 +317,7 @@ func (s3a *S3ApiServer) proxyToFiler(w http.ResponseWriter, r *http.Request, des
 
 	if err != nil {
 		glog.Errorf("NewRequest %s: %v", destUrl, err)
-		s3err.WriteErrorResponse(w, s3err.ErrInternalError, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 		return
 	}
 
@@ -331,19 +346,19 @@ func (s3a *S3ApiServer) proxyToFiler(w http.ResponseWriter, r *http.Request, des
 
 	if postErr != nil {
 		glog.Errorf("post to filer: %v", postErr)
-		s3err.WriteErrorResponse(w, s3err.ErrInternalError, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 		return
 	}
 	defer util.CloseResponse(resp)
 
 	if resp.StatusCode == http.StatusPreconditionFailed {
-		s3err.WriteErrorResponse(w, s3err.ErrPreconditionFailed, r)
+		s3err.WriteErrorResponse(w, r, s3err.ErrPreconditionFailed)
 		return
 	}
 
 	if (resp.ContentLength == -1 || resp.StatusCode == 404) && resp.StatusCode != 304 {
 		if r.Method != "DELETE" {
-			s3err.WriteErrorResponse(w, s3err.ErrNoSuchKey, r)
+			s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchKey)
 			return
 		}
 	}
@@ -394,7 +409,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, uploadUrl string, dataReader
 
 	etag = fmt.Sprintf("%x", hash.Sum(nil))
 
-	resp_body, ra_err := ioutil.ReadAll(resp.Body)
+	resp_body, ra_err := io.ReadAll(resp.Body)
 	if ra_err != nil {
 		glog.Errorf("upload to filer response read %d: %v", resp.StatusCode, ra_err)
 		return etag, s3err.ErrInternalError
