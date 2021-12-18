@@ -21,6 +21,8 @@ type MasterClient struct {
 	grpcDialOption grpc.DialOption
 
 	vidMap
+
+	OnPeerUpdate func(update *master_pb.ClusterNodeUpdate)
 }
 
 func NewMasterClient(grpcDialOption grpc.DialOption, clientType string, clientHost pb.ServerAddress, clientDataCenter string, masters []pb.ServerAddress) *MasterClient {
@@ -146,6 +148,18 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 				for _, deletedVid := range resp.VolumeLocation.DeletedVids {
 					glog.V(1).Infof("%s: %s masterClient removes volume %d", mc.clientType, loc.Url, deletedVid)
 					mc.deleteLocation(deletedVid, loc)
+				}
+			}
+
+			if resp.ClusterNodeUpdate != nil {
+				update := resp.ClusterNodeUpdate
+				if mc.OnPeerUpdate != nil {
+					if update.IsAdd {
+						glog.V(0).Infof("+ %s %s leader:%v\n", update.NodeType, update.Address, update.IsLeader)
+					} else {
+						glog.V(0).Infof("- %s %s leader:%v\n", update.NodeType, update.Address, update.IsLeader)
+					}
+					mc.OnPeerUpdate(update)
 				}
 			}
 

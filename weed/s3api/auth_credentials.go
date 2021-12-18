@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/glog"
@@ -23,6 +24,8 @@ type Iam interface {
 }
 
 type IdentityAccessManagement struct {
+	m sync.RWMutex
+
 	identities []*Identity
 	domain     string
 }
@@ -131,31 +134,38 @@ func (iam *IdentityAccessManagement) loadS3ApiConfiguration(config *iam_pb.S3Api
 		}
 		identities = append(identities, t)
 	}
-
+	iam.m.Lock()
 	// atomically switch
 	iam.identities = identities
+	iam.m.Unlock()
 	return nil
 }
 
 func (iam *IdentityAccessManagement) isEnabled() bool {
-
+	iam.m.RLock()
+	defer iam.m.RUnlock()
 	return len(iam.identities) > 0
 }
 
 func (iam *IdentityAccessManagement) lookupByAccessKey(accessKey string) (identity *Identity, cred *Credential, found bool) {
 
+	iam.m.RLock()
+	defer iam.m.RUnlock()
 	for _, ident := range iam.identities {
 		for _, cred := range ident.Credentials {
+			// println("checking", ident.Name, cred.AccessKey)
 			if cred.AccessKey == accessKey {
 				return ident, cred, true
 			}
 		}
 	}
+	glog.V(1).Infof("could not find accessKey %s", accessKey)
 	return nil, nil, false
 }
 
 func (iam *IdentityAccessManagement) lookupAnonymous() (identity *Identity, found bool) {
-
+	iam.m.RLock()
+	defer iam.m.RUnlock()
 	for _, ident := range iam.identities {
 		if ident.Name == "anonymous" {
 			return ident, true
@@ -177,6 +187,8 @@ func (iam *IdentityAccessManagement) Auth(f http.HandlerFunc, action Action) htt
 				r.Header.Set(xhttp.AmzIdentityId, identity.Name)
 				if identity.isAdmin() {
 					r.Header.Set(xhttp.AmzIsAdmin, "true")
+				} else if _, ok := r.Header[xhttp.AmzIsAdmin]; ok {
+					r.Header.Del(xhttp.AmzIsAdmin)
 				}
 			}
 			f(w, r)
@@ -191,40 +203,51 @@ func (iam *IdentityAccessManagement) authRequest(r *http.Request, action Action)
 	var identity *Identity
 	var s3Err s3err.ErrorCode
 	var found bool
+	var authType string
 	switch getRequestAuthType(r) {
 	case authTypeStreamingSigned:
 		return identity, s3err.ErrNone
 	case authTypeUnknown:
 		glog.V(3).Infof("unknown auth type")
+		r.Header.Set(xhttp.AmzAuthType, "Unknown")
 		return identity, s3err.ErrAccessDenied
 	case authTypePresignedV2, authTypeSignedV2:
 		glog.V(3).Infof("v2 auth type")
 		identity, s3Err = iam.isReqAuthenticatedV2(r)
+		authType = "SigV2"
 	case authTypeSigned, authTypePresigned:
 		glog.V(3).Infof("v4 auth type")
 		identity, s3Err = iam.reqSignatureV4Verify(r)
+		authType = "SigV4"
 	case authTypePostPolicy:
 		glog.V(3).Infof("post policy auth type")
+		r.Header.Set(xhttp.AmzAuthType, "PostPolicy")
 		return identity, s3err.ErrNone
 	case authTypeJWT:
 		glog.V(3).Infof("jwt auth type")
+		r.Header.Set(xhttp.AmzAuthType, "Jwt")
 		return identity, s3err.ErrNotImplemented
 	case authTypeAnonymous:
+		authType = "Anonymous"
 		identity, found = iam.lookupAnonymous()
 		if !found {
+			r.Header.Set(xhttp.AmzAuthType, authType)
 			return identity, s3err.ErrAccessDenied
 		}
 	default:
 		return identity, s3err.ErrNotImplemented
 	}
 
+	if len(authType) > 0 {
+		r.Header.Set(xhttp.AmzAuthType, authType)
+	}
 	if s3Err != s3err.ErrNone {
 		return identity, s3Err
 	}
 
 	glog.V(3).Infof("user name: %v actions: %v, action: %v", identity.Name, identity.Actions, action)
 
-	bucket, _ := getBucketAndObject(r)
+	bucket, _ := xhttp.GetBucketAndObject(r)
 
 	if !identity.canDo(action, bucket) {
 		return identity, s3err.ErrAccessDenied
@@ -238,31 +261,43 @@ func (iam *IdentityAccessManagement) authUser(r *http.Request) (*Identity, s3err
 	var identity *Identity
 	var s3Err s3err.ErrorCode
 	var found bool
+	var authType string
 	switch getRequestAuthType(r) {
 	case authTypeStreamingSigned:
 		return identity, s3err.ErrNone
 	case authTypeUnknown:
 		glog.V(3).Infof("unknown auth type")
+		r.Header.Set(xhttp.AmzAuthType, "Unknown")
 		return identity, s3err.ErrAccessDenied
 	case authTypePresignedV2, authTypeSignedV2:
 		glog.V(3).Infof("v2 auth type")
 		identity, s3Err = iam.isReqAuthenticatedV2(r)
+		authType = "SigV2"
 	case authTypeSigned, authTypePresigned:
 		glog.V(3).Infof("v4 auth type")
 		identity, s3Err = iam.reqSignatureV4Verify(r)
+		authType = "SigV4"
 	case authTypePostPolicy:
 		glog.V(3).Infof("post policy auth type")
+		r.Header.Set(xhttp.AmzAuthType, "PostPolicy")
 		return identity, s3err.ErrNone
 	case authTypeJWT:
 		glog.V(3).Infof("jwt auth type")
+		r.Header.Set(xhttp.AmzAuthType, "Jwt")
 		return identity, s3err.ErrNotImplemented
 	case authTypeAnonymous:
+		authType = "Anonymous"
 		identity, found = iam.lookupAnonymous()
 		if !found {
+			r.Header.Set(xhttp.AmzAuthType, authType)
 			return identity, s3err.ErrAccessDenied
 		}
 	default:
 		return identity, s3err.ErrNotImplemented
+	}
+
+	if len(authType) > 0 {
+		r.Header.Set(xhttp.AmzAuthType, authType)
 	}
 
 	glog.V(3).Infof("auth error: %v", s3Err)
