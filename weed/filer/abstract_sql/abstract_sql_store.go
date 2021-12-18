@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
 	"github.com/chrislusf/seaweedfs/weed/util"
-	"strings"
-	"sync"
 )
 
 type SqlGenerator interface {
@@ -30,6 +31,7 @@ type AbstractSqlStore struct {
 	SupportBucketTable bool
 	dbs                map[string]bool
 	dbsLock            sync.Mutex
+	EnableExtendedMeta bool
 }
 
 func (store *AbstractSqlStore) CanDropWholeBucket() bool {
@@ -159,8 +161,9 @@ func (store *AbstractSqlStore) InsertEntry(ctx context.Context, entry *filer.Ent
 	if len(entry.Chunks) > 50 {
 		meta = util.MaybeGzipData(meta)
 	}
-
-	res, err := db.ExecContext(ctx, store.GetSqlInsert(bucket), util.HashStringToLong(dir), name, dir, meta)
+	size := entry.Size()
+	etag := filer.ETagEntry(entry)
+	res, err := db.ExecContext(ctx, store.GetSqlInsert(bucket), util.HashStringToLong(dir), name, dir, meta, size, etag, entry.Mtime, entry.TtlSec, entry.IsDirectory())
 	if err == nil {
 		return
 	}
@@ -173,7 +176,7 @@ func (store *AbstractSqlStore) InsertEntry(ctx context.Context, entry *filer.Ent
 	// now the insert failed possibly due to duplication constraints
 	glog.V(1).Infof("insert %s falls back to update: %v", entry.FullPath, err)
 
-	res, err = db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir)
+	res, err = db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir, size, etag, entry.Mtime, entry.TtlSec, entry.IsDirectory())
 	if err != nil {
 		return fmt.Errorf("upsert %s: %s", entry.FullPath, err)
 	}
@@ -198,8 +201,9 @@ func (store *AbstractSqlStore) UpdateEntry(ctx context.Context, entry *filer.Ent
 	if err != nil {
 		return fmt.Errorf("encode %s: %s", entry.FullPath, err)
 	}
-
-	res, err := db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir)
+	size := entry.Size()
+	etag := filer.ETagEntry(entry)
+	res, err := db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir, size, etag, entry.Mtime, entry.TtlSec, entry.IsDirectory())
 	if err != nil {
 		return fmt.Errorf("update %s: %s", entry.FullPath, err)
 	}

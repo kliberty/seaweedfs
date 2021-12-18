@@ -11,6 +11,7 @@ type SqlGenPostgres struct {
 	CreateTableSqlTemplate string
 	DropTableSqlTemplate   string
 	UpsertQueryTemplate    string
+	EnableExtendedMeta     bool
 }
 
 var (
@@ -20,13 +21,19 @@ var (
 func (gen *SqlGenPostgres) GetSqlInsert(tableName string) string {
 	if gen.UpsertQueryTemplate != "" {
 		return fmt.Sprintf(gen.UpsertQueryTemplate, tableName)
+	} else if gen.EnableExtendedMeta {
+		return fmt.Sprintf(`INSERT INTO "%s" (dirhash,name,directory,meta,size,etag,mtime,ttlsec,isdirectory) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, tableName)
 	} else {
 		return fmt.Sprintf(`INSERT INTO "%s" (dirhash,name,directory,meta) VALUES($1,$2,$3,$4)`, tableName)
 	}
 }
 
 func (gen *SqlGenPostgres) GetSqlUpdate(tableName string) string {
-	return fmt.Sprintf(`UPDATE "%s" SET meta=$1 WHERE dirhash=$2 AND name=$3 AND directory=$4`, tableName)
+	if gen.EnableExtendedMeta {
+		return fmt.Sprintf(`UPDATE "%s" SET meta=$1,size=$5,etag=$6,mtime=$7,ttlsec=$8,isdirectory=$9 WHERE dirhash=$2 AND name=$3 AND directory=$4`, tableName)
+	} else {
+		return fmt.Sprintf(`UPDATE "%s" SET meta=$1,size=$5,etag=$6,isdirectory=$7 WHERE dirhash=$2 AND name=$3 AND directory=$4`, tableName)
+	}
 }
 
 func (gen *SqlGenPostgres) GetSqlFind(tableName string) string {

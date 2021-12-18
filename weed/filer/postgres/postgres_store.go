@@ -41,10 +41,11 @@ func (store *PostgresStore) Initialize(configuration util.Configuration, prefix 
 		configuration.GetInt(prefix+"connection_max_idle"),
 		configuration.GetInt(prefix+"connection_max_open"),
 		configuration.GetInt(prefix+"connection_max_lifetime_seconds"),
+		configuration.GetBool(prefix+"enableExtendedMeta"),
 	)
 }
 
-func (store *PostgresStore) initialize(upsertQuery string, enableUpsert bool, user, password, hostname string, port int, database, schema, sslmode string, maxIdle, maxOpen, maxLifetimeSeconds int) (err error) {
+func (store *PostgresStore) initialize(upsertQuery string, enableUpsert bool, user, password, hostname string, port int, database, schema, sslmode string, maxIdle, maxOpen, maxLifetimeSeconds int, configEnableExtendedMeta bool) (err error) {
 
 	store.SupportBucketTable = false
 	if !enableUpsert {
@@ -54,6 +55,7 @@ func (store *PostgresStore) initialize(upsertQuery string, enableUpsert bool, us
 		CreateTableSqlTemplate: "",
 		DropTableSqlTemplate:   `drop table "%s"`,
 		UpsertQueryTemplate:    upsertQuery,
+		EnableExtendedMeta:     configEnableExtendedMeta,
 	}
 
 	sqlUrl := fmt.Sprintf(CONNECTION_URL_PATTERN, hostname, port, sslmode)

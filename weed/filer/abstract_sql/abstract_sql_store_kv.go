@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"strings"
+
 	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/util"
-	"strings"
 )
 
 func (store *AbstractSqlStore) KvPut(ctx context.Context, key []byte, value []byte) (err error) {
@@ -18,9 +19,13 @@ func (store *AbstractSqlStore) KvPut(ctx context.Context, key []byte, value []by
 		return fmt.Errorf("findDB: %v", err)
 	}
 
+	var res sql.Result
 	dirStr, dirHash, name := genDirAndName(key)
-
-	res, err := db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value)
+	if store.EnableExtendedMeta {
+		_, err = db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value, nil, nil, nil, nil, nil)
+	} else {
+		_, err = db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value, nil, nil, nil, nil, nil)
+	}
 	if err == nil {
 		return
 	}
@@ -33,7 +38,11 @@ func (store *AbstractSqlStore) KvPut(ctx context.Context, key []byte, value []by
 	// now the insert failed possibly due to duplication constraints
 	glog.V(1).Infof("kv insert falls back to update: %s", err)
 
-	res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr)
+	if store.EnableExtendedMeta {
+		res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr, nil, nil, nil, nil, nil)
+	} else {
+		res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr, nil, nil, nil, nil, nil)
+	}
 	if err != nil {
 		return fmt.Errorf("kv upsert: %s", err)
 	}
