@@ -1,6 +1,8 @@
 package notification
 
 import (
+	"fmt"
+
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/util"
 	"github.com/golang/protobuf/proto"
@@ -17,8 +19,27 @@ type MessageQueue interface {
 var (
 	MessageQueues []MessageQueue
 
-	Queue MessageQueue
+	Queue *MultiQueue
 )
+
+type MultiQueue struct {
+	queues []MessageQueue
+}
+
+func (k *MultiQueue) Initialize(configuration util.Configuration, prefix string) error {
+	return nil
+}
+
+func (q *MultiQueue) GetName() string {
+	return "MULTI"
+}
+
+func (k *MultiQueue) SendMessage(key string, message proto.Message) (err error) {
+	for _, q := range k.queues {
+		q.SendMessage(key, message)
+	}
+	return nil
+}
 
 func LoadConfiguration(config *util.ViperProxy, prefix string) {
 
@@ -29,14 +50,21 @@ func LoadConfiguration(config *util.ViperProxy, prefix string) {
 	validateOneEnabledQueue(config)
 
 	for _, queue := range MessageQueues {
+		fmt.Println("FOUND MESSAGE QUEUE", queue.GetName())
+	}
+
+	for _, queue := range MessageQueues {
+		fmt.Println(prefix+queue.GetName(), ".enabled", config.GetBool(prefix+queue.GetName()+".enabled"))
 		if config.GetBool(prefix + queue.GetName() + ".enabled") {
 			if err := queue.Initialize(config, prefix+queue.GetName()+"."); err != nil {
 				glog.Fatalf("Failed to initialize notification for %s: %+v",
 					queue.GetName(), err)
 			}
-			Queue = queue
+			if Queue == nil {
+				Queue = &MultiQueue{}
+			}
+			Queue.queues = append(Queue.queues, queue)
 			glog.V(0).Infof("Configure notification message queue for %s", queue.GetName())
-			return
 		}
 	}
 

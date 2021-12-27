@@ -166,8 +166,10 @@ require (
 require (
 	cloud.google.com/go/kms v1.0.0 // indirect
 	github.com/d4l3k/messagediff v1.2.1 // indirect
+	github.com/eclipse/paho.mqtt.golang v1.3.5 // indirect
 	github.com/fluent/fluent-logger-golang v1.8.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
