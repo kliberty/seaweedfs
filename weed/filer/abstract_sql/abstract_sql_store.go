@@ -3,6 +3,7 @@ package abstract_sql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -145,6 +146,27 @@ func (store *AbstractSqlStore) getTxOrDB(ctx context.Context, fullpath util.Full
 	return
 }
 
+type jsonMeta struct {
+	filer.Attr
+	HardLinkId      filer.HardLinkId
+	HardLinkCounter int32
+	ETag            string
+	Extended        map[string][]byte
+	IsDirectory     bool
+}
+
+func makeJsonMeta(entry *filer.Entry) (j []byte, err error) {
+	j, err = json.Marshal(jsonMeta{
+		IsDirectory:     entry.IsDirectory(),
+		Attr:            entry.Attr,
+		HardLinkId:      entry.HardLinkId,
+		HardLinkCounter: entry.HardLinkCounter,
+		ETag:            filer.ETagEntry(entry),
+		Extended:        entry.Extended,
+	})
+	return
+}
+
 func (store *AbstractSqlStore) InsertEntry(ctx context.Context, entry *filer.Entry) (err error) {
 
 	db, bucket, shortPath, err := store.getTxOrDB(ctx, entry.FullPath, false)
@@ -161,9 +183,9 @@ func (store *AbstractSqlStore) InsertEntry(ctx context.Context, entry *filer.Ent
 	if len(entry.Chunks) > 50 {
 		meta = util.MaybeGzipData(meta)
 	}
-	size := entry.Size()
-	etag := filer.ETagEntry(entry)
-	res, err := db.ExecContext(ctx, store.GetSqlInsert(bucket), util.HashStringToLong(dir), name, dir, meta, size, etag, entry.Mtime, entry.TtlSec, entry.IsDirectory())
+
+	json_meta, _ := makeJsonMeta(entry)
+	_, err = db.ExecContext(ctx, store.GetSqlInsert(bucket), util.HashStringToLong(dir), name, dir, meta, json_meta)
 	if err == nil {
 		return
 	}
@@ -176,7 +198,7 @@ func (store *AbstractSqlStore) InsertEntry(ctx context.Context, entry *filer.Ent
 	// now the insert failed possibly due to duplication constraints
 	glog.V(1).Infof("insert %s falls back to update: %v", entry.FullPath, err)
 
-	res, err = db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir, size, etag, entry.Mtime, entry.TtlSec, entry.IsDirectory())
+	res, err := db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir, json_meta)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %s", entry.FullPath, err)
 	}
@@ -201,9 +223,9 @@ func (store *AbstractSqlStore) UpdateEntry(ctx context.Context, entry *filer.Ent
 	if err != nil {
 		return fmt.Errorf("encode %s: %s", entry.FullPath, err)
 	}
-	size := entry.Size()
-	etag := filer.ETagEntry(entry)
-	res, err := db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir, size, etag, entry.Mtime, entry.TtlSec, entry.IsDirectory())
+
+	json_meta, _ := makeJsonMeta(entry)
+	res, err := db.ExecContext(ctx, store.GetSqlUpdate(bucket), meta, util.HashStringToLong(dir), name, dir, json_meta)
 	if err != nil {
 		return fmt.Errorf("update %s: %s", entry.FullPath, err)
 	}

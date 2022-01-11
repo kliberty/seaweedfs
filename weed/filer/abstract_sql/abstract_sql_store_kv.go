@@ -22,9 +22,9 @@ func (store *AbstractSqlStore) KvPut(ctx context.Context, key []byte, value []by
 	var res sql.Result
 	dirStr, dirHash, name := genDirAndName(key)
 	if store.EnableExtendedMeta {
-		_, err = db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value, nil, nil, nil, nil, nil)
+		_, err = db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value, nil)
 	} else {
-		_, err = db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value, nil, nil, nil, nil, nil)
+		_, err = db.ExecContext(ctx, store.GetSqlInsert(DEFAULT_TABLE), dirHash, name, dirStr, value, nil)
 	}
 	if err == nil {
 		return
@@ -39,9 +39,9 @@ func (store *AbstractSqlStore) KvPut(ctx context.Context, key []byte, value []by
 	glog.V(1).Infof("kv insert falls back to update: %s", err)
 
 	if store.EnableExtendedMeta {
-		res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr, nil, nil, nil, nil, nil)
+		res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr, nil)
 	} else {
-		res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr, nil, nil, nil, nil, nil)
+		res, err = db.ExecContext(ctx, store.GetSqlUpdate(DEFAULT_TABLE), value, dirHash, name, dirStr, nil)
 	}
 	if err != nil {
 		return fmt.Errorf("kv upsert: %s", err)
