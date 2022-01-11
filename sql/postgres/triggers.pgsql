@@ -1,8 +1,8 @@
 
 BEGIN;
-CREATE TRIGGER filemeta_insert_trigger
-    INSTEAD OF INSERT ON filemeta FOR EACH ROW
-    EXECUTE FUNCTION fmeta_pgsql_ins ();
+-- CREATE TRIGGER filemeta_insert_trigger
+--     INSTEAD OF INSERT ON filemeta FOR EACH ROW
+--     EXECUTE FUNCTION fmeta_pgsql_ins ();
 
 -- CREATE TRIGGER filemeta_delete_trigger
 --     INSTEAD OF DELETE ON filemeta FOR EACH ROW

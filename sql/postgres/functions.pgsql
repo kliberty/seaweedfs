@@ -5,18 +5,16 @@ CREATE OR REPLACE FUNCTION fmeta_pgsql_ins ()
 DECLARE
     flag boolean;
 BEGIN
-    INSERT INTO internal_filemeta (dirhash, name, directory, meta, isdirectory, filesize)
+    INSERT INTO internal_filemeta (dirhash, name, directory, meta)
         VALUES (
             NEW.dirhash, 
             NEW.name, 
             NEW.directory, 
-            NEW.meta, 
-            (NEW.jon_meta::jsonb ->> 'IsDirectory')::bool, 
-            (NEW.json_meta::jsonb ->> 'FileSize')::bigint
+            NEW.meta
         )
         ON CONFLICT (dirhash, name)
             DO UPDATE SET
-                meta = EXCLUDED.meta, isdirectory = (NEW.json_meta::jsonb ->> 'IsDirectory')::bool, filesize = (NEW.json_meta::jsonb ->> 'FileSize')::bigint
+                meta = EXCLUDED.meta WHERE internal_filemeta.meta != EXCLUDED.meta
         RETURNING (xmax = 0) INTO flag;
     -- We already know if there is a conflict, no need to use an UPSERT again
     IF flag THEN
@@ -32,7 +30,8 @@ BEGIN
             internal_json_meta
         SET json_meta = NEW.json_meta::jsonb
         WHERE dirhash = NEW.dirhash
-            AND name = NEW.name;
+            AND name = NEW.name AND NOT
+                (internal_json_meta.json_meta @> NEW.json_meta::jsonb AND internal_json_meta.json_meta <@ NEW.json_meta::jsonb);
     END IF;
     RETURN NEW;
 END;
@@ -69,9 +68,9 @@ BEGIN
         PERFORM decrease_count (metric);
     END CASE;
     RETURN NULL;
-EXCEPTION
-    WHEN OTHERS THEN
-    RAISE warning 'Caught'; RETURN NULL;
+-- EXCEPTION
+--     WHEN OTHERS THEN
+--     RAISE warning 'Caught'; RETURN NULL;
     END;
 $$;
 
@@ -107,9 +106,6 @@ BEGIN
 END;
 $$;
 
-CREATE TABLE system_meta_counts (
-    metric text PRIMARY KEY, counts bigint
-);
 
 -- SELECT pg_stat_statements_reset();
 -- SELECT pg_stat_reset();
@@ -119,7 +115,80 @@ CREATE OR REPLACE FUNCTION reset_stats ()
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    SELECT pg_stat_statements_reset();
-    SELECT pg_stat_reset();
+    PERFORM pg_stat_statements_reset();
+    PERFORM pg_stat_reset();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION collection_stats()
+    RETURNS TABLE (collection TEXT, "size" numeric)
+    LANGUAGE plpgsql 
+    AS $$
+DECLARE
+    labels TEXT[] = ARRAY['topaz', 'seaweed-image-cache'];
+    item TEXT;
+BEGIN
+	FOREACH item IN ARRAY labels LOOP
+		RETURN QUERY
+            SELECT item, sum((json_meta ->> 'FileSize')::bigint) AS topaz 
+                FROM filemeta WHERE json_meta @> jsonb_build_object('Collection', item) ;
+	END LOOP;
+RETURN;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION fancy_list2(dir TEXT)
+    RETURNS TABLE (directory TEXT, name TEXT, isdirectory BOOL, child BOOL)
+    LANGUAGE plpgsql 
+    AS $$
+DECLARE
+BEGIN
+	RETURN QUERY SELECT directory, name, false, false FROM filemeta WHERE directory = dir AND (json_meta ->> 'IsDirectory')::bool = false ORDER BY name;
+
+	FOR item IN (SELECT name FROM filemeta WHERE directory = dir AND (json_meta ->> 'IsDirectory')::bool = true ORDER BY name)
+		RETURN QUERY
+            SELECT directory, name, (json_meta ->> 'IsDirectory')::bool, true
+                FROM filemeta WHERE directory = dir || '/' || item.name;
+	END LOOP;
+RETURN;
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION fancy_list1(dir TEXT)
+    RETURNS TABLE (directory TEXT, name TEXT, isdirectory BOOL, child BOOL)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN WITH sub1 AS
+    (SELECT dirhash,
+            directory,
+            name,
+            isdirectory
+     FROM filemeta
+     WHERE directory = dir)
+    (SELECT sub1.directory,
+            sub1.name,
+            sub1.isdirectory,
+            false as child
+     FROM sub1
+     ORDER BY sub1.isdirectory,
+              sub1.directory,
+              sub1.name ASC)
+UNION ALL
+    (SELECT
+        DISTINCT ON (f1.isdirectory, f1.directory)
+        f1.directory,
+        f1.name,
+        f1.isdirectory,
+        true as child
+     FROM sub1
+         JOIN filemeta f1 ON f1.directory = (sub1.directory || '/' || sub1.name)
+     WHERE 
+         f1.isdirectory = FALSE
+         AND sub1.isdirectory = TRUE
+     ORDER BY f1.isdirectory,
+              f1.directory,
+              f1.name ASC);
 END;
 $$;
