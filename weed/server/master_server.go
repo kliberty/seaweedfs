@@ -208,30 +208,16 @@ func (ms *MasterServer) proxyToLeader(f http.HandlerFunc) http.HandlerFunc {
 }
 
 func (ms *MasterServer) startAdminScripts() {
-	var err error
 
 	v := util.GetViper()
 	adminScripts := v.GetString("master.maintenance.scripts")
 	if adminScripts == "" {
-		adminScripts = `
-		lock
-		ec.encode -fullPercent=95 -quietFor=1h
-		ec.rebuild -force
-		ec.balance -force
-		volume.deleteEmpty -quietFor=24h -force
-		volume.balance -force
-		volume.fix.replication
-		s3.clean.uploads -timeAgo=24h
-		unlock
-	`
+		return
 	}
 	glog.V(0).Infof("adminScripts: %v", adminScripts)
 
 	v.SetDefault("master.maintenance.sleep_minutes", 17)
 	sleepMinutes := v.GetInt("master.maintenance.sleep_minutes")
-
-	v.SetDefault("master.filer.default", "localhost:8888")
-	filerHostPort := v.GetString("master.filer.default")
 
 	scriptLines := strings.Split(adminScripts, "\n")
 	if !strings.Contains(adminScripts, "lock") {
@@ -245,14 +231,9 @@ func (ms *MasterServer) startAdminScripts() {
 	shellOptions.GrpcDialOption = security.LoadClientTLS(v, "grpc.master")
 	shellOptions.Masters = &masterAddress
 
-	shellOptions.FilerAddress = pb.ServerAddress(filerHostPort)
 	shellOptions.Directory = "/"
-	if err != nil {
-		glog.V(0).Infof("failed to parse master.filer.default = %s : %v\n", filerHostPort, err)
-		return
-	}
 
-	commandEnv := shell.NewCommandEnv(shellOptions)
+	commandEnv := shell.NewCommandEnv(&shellOptions)
 
 	reg, _ := regexp.Compile(`'.*?'|".*?"|\S+`)
 
@@ -264,6 +245,10 @@ func (ms *MasterServer) startAdminScripts() {
 		for {
 			time.Sleep(time.Duration(sleepMinutes) * time.Minute)
 			if ms.Topo.IsLeader() {
+				shellOptions.FilerAddress = ms.GetOneFiler()
+				if shellOptions.FilerAddress == "" {
+					continue
+				}
 				for _, line := range scriptLines {
 					for _, c := range strings.Split(line, ";") {
 						processEachCmd(reg, c, commandEnv)

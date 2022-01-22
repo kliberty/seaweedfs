@@ -40,7 +40,7 @@ func followUpdatesAndUploadToRemote(option *RemoteSyncOptions, filerSource *sour
 
 	lastOffsetTs := collectLastSyncOffset(option, option.grpcDialOption, pb.ServerAddress(*option.filerAddress), mountedDir, *option.timeAgo)
 
-	return pb.FollowMetadata(pb.ServerAddress(*option.filerAddress), option.grpcDialOption, "filer.remote.sync",
+	return pb.FollowMetadata(pb.ServerAddress(*option.filerAddress), option.grpcDialOption, "filer.remote.sync", option.clientId,
 		mountedDir, []string{filer.DirectoryEtcRemote}, lastOffsetTs.UnixNano(), 0, processEventFnWithOffset, false)
 }
 
@@ -227,7 +227,7 @@ func shouldSendToRemote(entry *filer_pb.Entry) bool {
 func updateLocalEntry(filerClient filer_pb.FilerClient, dir string, entry *filer_pb.Entry, remoteEntry *filer_pb.RemoteEntry) error {
 	remoteEntry.LastLocalSyncTsNs = time.Now().UnixNano()
 	entry.RemoteEntry = remoteEntry
-	return filerClient.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	return filerClient.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 		_, err := client.UpdateEntry(context.Background(), &filer_pb.UpdateEntryRequest{
 			Directory: dir,
 			Entry:     entry,

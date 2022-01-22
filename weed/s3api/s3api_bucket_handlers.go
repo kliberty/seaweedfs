@@ -55,7 +55,7 @@ func (s3a *S3ApiServer) ListBucketsHandler(w http.ResponseWriter, r *http.Reques
 	var buckets []*s3.Bucket
 	for _, entry := range entries {
 		if entry.IsDirectory {
-			if identity != nil && !identity.canDo(s3_constants.ACTION_LIST, entry.Name) {
+			if identity != nil && !identity.canDo(s3_constants.ACTION_LIST, entry.Name, "") {
 				continue
 			}
 			buckets = append(buckets, &s3.Bucket{
@@ -83,7 +83,7 @@ func (s3a *S3ApiServer) PutBucketHandler(w http.ResponseWriter, r *http.Request)
 
 	// avoid duplicated buckets
 	errCode := s3err.ErrNone
-	if err := s3a.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	if err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 		if resp, err := client.CollectionList(context.Background(), &filer_pb.CollectionListRequest{
 			IncludeEcVolumes:     true,
 			IncludeNormalVolumes: true,
@@ -146,7 +146,7 @@ func (s3a *S3ApiServer) DeleteBucketHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	err := s3a.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 
 		// delete collection
 		deleteCollectionRequest := &filer_pb.DeleteCollectionRequest{

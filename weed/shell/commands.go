@@ -29,7 +29,7 @@ type ShellOptions struct {
 type CommandEnv struct {
 	env          map[string]string
 	MasterClient *wdclient.MasterClient
-	option       ShellOptions
+	option       *ShellOptions
 	locker       *exclusive_locks.ExclusiveLocker
 }
 
@@ -43,7 +43,7 @@ var (
 	Commands = []command{}
 )
 
-func NewCommandEnv(options ShellOptions) *CommandEnv {
+func NewCommandEnv(options *ShellOptions) *CommandEnv {
 	ce := &CommandEnv{
 		env:          make(map[string]string),
 		MasterClient: wdclient.NewMasterClient(options.GrpcDialOption, pb.AdminShellClient, "", "", pb.ServerAddresses(*options.Masters).ToAddresses()),
@@ -97,9 +97,9 @@ func (ce *CommandEnv) checkDirectory(path string) error {
 
 var _ = filer_pb.FilerClient(&CommandEnv{})
 
-func (ce *CommandEnv) WithFilerClient(fn func(filer_pb.SeaweedFilerClient) error) error {
+func (ce *CommandEnv) WithFilerClient(streamingMode bool, fn func(filer_pb.SeaweedFilerClient) error) error {
 
-	return pb.WithGrpcFilerClient(ce.option.FilerAddress, ce.option.GrpcDialOption, fn)
+	return pb.WithGrpcFilerClient(streamingMode, ce.option.FilerAddress, ce.option.GrpcDialOption, fn)
 
 }
 

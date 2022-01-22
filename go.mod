@@ -100,7 +100,7 @@ require (
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20190826022208-cac0b30c2563 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
-	github.com/seaweedfs/fuse v1.2.0
+	github.com/seaweedfs/fuse v1.2.2
 	github.com/seaweedfs/goexif v1.0.2
 	github.com/sirupsen/logrus v1.6.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
@@ -136,9 +136,9 @@ require (
 	golang.org/x/image v0.0.0-20200119044424-58c23975cae1
 	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d
 	golang.org/x/oauth2 v0.0.0-20210819190943-2bc19b11175f // indirect
-	golang.org/x/sys v0.0.0-20210908233432-aa78b53d3365
-	golang.org/x/text v0.3.6 // indirect
-	golang.org/x/tools v0.1.5
+	golang.org/x/sys v0.0.0-20220111092808-5a964db01320
+	golang.org/x/text v0.3.7 // indirect
+	golang.org/x/tools v0.1.6-0.20210726203631-07bc1bf47fb2
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/api v0.57.0
 	google.golang.org/appengine v1.6.7 // indirect
@@ -165,6 +165,7 @@ require (
 
 require (
 	cloud.google.com/go/kms v1.0.0 // indirect
+	github.com/apache/thrift v0.15.0 // indirect
 	github.com/d4l3k/messagediff v1.2.1 // indirect
 	github.com/eclipse/paho.mqtt.golang v1.3.5 // indirect
 	github.com/fluent/fluent-logger-golang v1.8.0 // indirect
@@ -176,6 +177,7 @@ require (
 	github.com/jcmturner/rpc/v2 v2.0.2 // indirect
 	github.com/mattn/go-runewidth v0.0.7 // indirect
 	github.com/mattn/go-sqlite3 v2.0.1+incompatible // indirect
+	github.com/miekg/dns v1.1.44 // indirect
 	github.com/philhofer/fwd v1.1.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tinylib/msgp v1.1.6 // indirect
@@ -190,5 +192,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
 
-// replace github.com/seaweedfs/fuse => /Users/chris/go/src/github.com/seaweedfs/fuse
-// replace github.com/chrislusf/raft => /Users/chris/go/src/github.com/chrislusf/raft
+// replace github.com/seaweedfs/fuse => /Users/chrislu/go/src/github.com/seaweedfs/fuse
+// replace github.com/chrislusf/raft => /Users/chrislu/go/src/github.com/chrislusf/raft
