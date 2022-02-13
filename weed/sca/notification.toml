@@ -1,0 +1,9 @@
+[notification.mqtt]
+enabled = true
+broker = "box.lan"
+port = 1883
+topic = "seaweed/test1"
+
+[notification.log]
+# this is only for debugging perpose and does not work with "weed filer.replicate"
+enabled = true
