@@ -111,6 +111,10 @@ func (k *MqttQueue) SendMessage(key string, message proto.Message) (err error) {
 	bytes, _ := json.Marshal(simple)
 	k.client.Publish(k.topic+"/json", 0, false, string(bytes))
 	// glog.V(0).Infof("%v: %+v", key, message)
+
+	bytes, _ = json.Marshal(pbmsg)
+	k.client.Publish(k.topic+"/json-full", 0, false, string(bytes))
+
 	return nil
 }
 
