@@ -1,3 +1,7 @@
-[leveldb2]
+[rocksdb]
 enabled = true
-dir = "/data/filerldb2"
+dir = "/data/filer-data"
+
+[leveldb2]
+enabled = false
+dir = "/data/filer-data"

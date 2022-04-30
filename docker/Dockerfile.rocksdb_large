@@ -9,28 +9,35 @@ ENV ROCKSDB_VERSION v6.22.1
 RUN cd /tmp && \
     git clone https://github.com/facebook/rocksdb.git /tmp/rocksdb --depth 1 --single-branch --branch $ROCKSDB_VERSION && \
     cd rocksdb && \
-    make static_lib && \
-    make install-static
+    make static_lib -j 8 && \
+    make install-static -j 8
 
 ENV CGO_CFLAGS "-I/tmp/rocksdb/include"
 ENV CGO_LDFLAGS "-L/tmp/rocksdb -lrocksdb -lstdc++ -lm -lz -lbz2 -lsnappy -llz4 -lzstd"
 
+COPY ./weed /tmp/weed/weed
+COPY go.mod go.sum /tmp/weed/
+RUN cd /tmp/weed/weed && go install -tags "5BytesOffset rocksdb" -ldflags "-extldflags -static ${LDFLAGS}"
+COPY ./docker /tmp/weed/docker
+
+RUN ls -l /tmp && ls -l /tmp/weed && ls -l /tmp/weed/docker
+
 # build SeaweedFS
-RUN mkdir -p /go/src/github.com/chrislusf/
-RUN git clone https://github.com/chrislusf/seaweedfs /go/src/github.com/chrislusf/seaweedfs
-ARG BRANCH=${BRANCH:-master}
-RUN cd /go/src/github.com/chrislusf/seaweedfs && git checkout $BRANCH
-RUN cd /go/src/github.com/chrislusf/seaweedfs/weed \
-  && export LDFLAGS="-X github.com/chrislusf/seaweedfs/weed/util.COMMIT=$(git rev-parse --short HEAD)" \
-  && go install -tags "5BytesOffset rocksdb" -ldflags "-extldflags -static ${LDFLAGS}"
+# RUN mkdir -p /go/src/github.com/chrislusf/
+# RUN git clone https://github.com/chrislusf/seaweedfs /go/src/github.com/chrislusf/seaweedfs
+# ARG BRANCH=${BRANCH:-master}
+# RUN cd /go/src/github.com/chrislusf/seaweedfs && git checkout $BRANCH
+# RUN cd /go/src/github.com/chrislusf/seaweedfs/weed \
+#   && export LDFLAGS="-X github.com/chrislusf/seaweedfs/weed/util.COMMIT=$(git rev-parse --short HEAD)" \
+#   && go install -tags "5BytesOffset rocksdb" -ldflags "-extldflags -static ${LDFLAGS}"
 
 
 FROM alpine AS final
-LABEL author="Chris Lu"
+# LABEL author="Chris Lu"
 COPY --from=builder /go/bin/weed /usr/bin/
 RUN mkdir -p /etc/seaweedfs
-COPY --from=builder /go/src/github.com/chrislusf/seaweedfs/docker/filer.toml /etc/seaweedfs/filer.toml
-COPY --from=builder /go/src/github.com/chrislusf/seaweedfs/docker/entrypoint.sh /entrypoint.sh
+# COPY --from=builder /tmp/weed/docker/filer.toml /etc/seaweedfs/filer.toml
+# COPY --from=builder /tmp/weed/docker/entrypoint.sh /entrypoint.sh
 RUN apk add fuse snappy gflags
 
 # volume server gprc port
@@ -50,12 +57,12 @@ EXPOSE 8333
 # webdav server http port
 EXPOSE 7333
 
-RUN mkdir -p /data/filerldb2
+RUN mkdir -p /data/filer-data
 
 VOLUME /data
 
 WORKDIR /data
 
-RUN chmod +x /entrypoint.sh
+# RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+# ENTRYPOINT ["/entrypoint.sh"]
