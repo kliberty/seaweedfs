@@ -175,10 +175,12 @@ require (
 	github.com/aws/smithy-go v1.11.2 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/d4l3k/messagediff v1.2.1 // indirect
+	github.com/eclipse/paho.mqtt.golang v1.3.5 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/fclairamb/go-log v0.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/googleapis/go-type-adapters v1.0.0 // indirect
+	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/hashicorp/go-hclog v1.2.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-msgpack v1.1.5 // indirect
