@@ -3,12 +3,13 @@ package filer
 import (
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/cluster"
-	"github.com/chrislusf/seaweedfs/weed/pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/cluster"
+	"github.com/chrislusf/seaweedfs/weed/pb"
+	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
 
 	"google.golang.org/grpc"
 

@@ -9,7 +9,9 @@ option java_outer_classname = "FilerProto";
 //////////////////////////////////////////////////
 
 service SeaweedFiler {
-
+    rpc CreateHardLink (CreateHardLinkRequest) returns (CreateHardLinkResponse){
+        
+    }
     rpc LookupDirectoryEntry (LookupDirectoryEntryRequest) returns (LookupDirectoryEntryResponse) {
     }
 
@@ -170,6 +172,17 @@ message FuseAttributes {
     string symlink_target = 13;
     bytes md5 = 14;
     string disk_type = 15;
+}
+
+message CreateHardLinkRequest {
+    FullEntry fromEntry = 1;
+    FullEntry toEntry = 2;
+    string targetDir = 3;
+    string  targetName = 4;
+}
+
+message CreateHardLinkResponse {
+    string error = 1;
 }
 
 message CreateEntryRequest {

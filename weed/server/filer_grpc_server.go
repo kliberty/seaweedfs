@@ -3,13 +3,15 @@ package weed_server
 import (
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/pb"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/chrislusf/seaweedfs/weed/pb"
+
 	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/chrislusf/seaweedfs/weed/filesys"
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/operation"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
@@ -17,6 +19,68 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/storage/needle"
 	"github.com/chrislusf/seaweedfs/weed/util"
 )
+
+func (fs *FilerServer) CreateHardLink(ctx context.Context, req *filer_pb.CreateHardLinkRequest) (*filer_pb.CreateHardLinkResponse, error) {
+	oldFile := req.FromEntry
+	toFile := req.ToEntry
+	var name string
+	var dir string
+	if toFile == nil {
+		name = req.TargetName
+		dir = req.TargetDir
+	} else {
+		name = toFile.Entry.Name
+		dir = toFile.Dir
+	}
+
+	if oldFile.Entry.IsDirectory {
+		glog.Errorf("old node is not a file: %+v", oldFile)
+	}
+
+	glog.V(4).Infof("RPC Link: %v/%v -> %v/%v", oldFile.Dir, oldFile.Entry.Name, dir, name)
+
+	oldEntry := oldFile.Entry
+
+	// update old file to hardlink mode
+	if len(oldEntry.HardLinkId) == 0 {
+		oldEntry.HardLinkId = append(util.RandomBytes(16), filesys.HARD_LINK_MARKER)
+		oldEntry.HardLinkCounter = 1
+	}
+	oldEntry.HardLinkCounter++
+	updateOldEntryRequest := &filer_pb.UpdateEntryRequest{
+		Directory: oldFile.Dir,
+		Entry:     oldEntry,
+	}
+
+	// CreateLink 1.2 : update new file to hardlink mode
+	request := &filer_pb.CreateEntryRequest{
+		Directory: dir,
+		Entry: &filer_pb.Entry{
+			Name:            name,
+			IsDirectory:     false,
+			Attributes:      oldEntry.Attributes,
+			Chunks:          oldEntry.Chunks,
+			Extended:        oldEntry.Extended,
+			HardLinkId:      oldEntry.HardLinkId,
+			HardLinkCounter: oldEntry.HardLinkCounter,
+		},
+	}
+
+	// apply changes to the filer, and also apply to local metaCache
+
+	if resp, err := fs.UpdateEntry(ctx, updateOldEntryRequest); err != nil {
+		glog.V(0).Infof("RPC Link: %v/%v -> %v/%v :%v :%v", oldFile.Dir, oldFile.Entry.Name, req.ToEntry.Dir, req.ToEntry.Entry.Name, err, resp)
+		return nil, err
+	}
+
+	if resp, err := fs.CreateEntry(ctx, request); err != nil {
+		glog.V(0).Infof("RPC Link: %v/%v -> %v/%v :%v :%v", oldFile.Dir, oldFile.Entry.Name, req.ToEntry.Dir, req.ToEntry.Entry.Name, err, resp)
+		return nil, err
+	}
+
+	return &filer_pb.CreateHardLinkResponse{}, nil
+
+}
 
 func (fs *FilerServer) LookupDirectoryEntry(ctx context.Context, req *filer_pb.LookupDirectoryEntryRequest) (*filer_pb.LookupDirectoryEntryResponse, error) {
 

@@ -181,11 +181,12 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 			so, err := fs.detectStorageOption0(r.RequestURI,
 				"seaweed-image-cache",
 				query.Get("replication"),
-				// query.Get("ttl"),
 				ttl,
+				query.Get("fsync"),
 				query.Get("disk"),
 				query.Get("dataCenter"),
 				query.Get("rack"),
+				query.Get("node"),
 			)
 			if err != nil {
 				if err == ErrReadOnly {

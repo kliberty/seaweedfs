@@ -18,6 +18,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SeaweedFilerClient interface {
+	CreateHardLink(ctx context.Context, in *CreateHardLinkRequest, opts ...grpc.CallOption) (*CreateHardLinkResponse, error)
 	LookupDirectoryEntry(ctx context.Context, in *LookupDirectoryEntryRequest, opts ...grpc.CallOption) (*LookupDirectoryEntryResponse, error)
 	ListEntries(ctx context.Context, in *ListEntriesRequest, opts ...grpc.CallOption) (SeaweedFiler_ListEntriesClient, error)
 	CreateEntry(ctx context.Context, in *CreateEntryRequest, opts ...grpc.CallOption) (*CreateEntryResponse, error)
@@ -47,6 +48,15 @@ type seaweedFilerClient struct {
 
 func NewSeaweedFilerClient(cc grpc.ClientConnInterface) SeaweedFilerClient {
 	return &seaweedFilerClient{cc}
+}
+
+func (c *seaweedFilerClient) CreateHardLink(ctx context.Context, in *CreateHardLinkRequest, opts ...grpc.CallOption) (*CreateHardLinkResponse, error) {
+	out := new(CreateHardLinkResponse)
+	err := c.cc.Invoke(ctx, "/filer_pb.SeaweedFiler/CreateHardLink", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *seaweedFilerClient) LookupDirectoryEntry(ctx context.Context, in *LookupDirectoryEntryRequest, opts ...grpc.CallOption) (*LookupDirectoryEntryResponse, error) {
@@ -356,6 +366,7 @@ func (c *seaweedFilerClient) CacheRemoteObjectToLocalCluster(ctx context.Context
 // All implementations must embed UnimplementedSeaweedFilerServer
 // for forward compatibility
 type SeaweedFilerServer interface {
+	CreateHardLink(context.Context, *CreateHardLinkRequest) (*CreateHardLinkResponse, error)
 	LookupDirectoryEntry(context.Context, *LookupDirectoryEntryRequest) (*LookupDirectoryEntryResponse, error)
 	ListEntries(*ListEntriesRequest, SeaweedFiler_ListEntriesServer) error
 	CreateEntry(context.Context, *CreateEntryRequest) (*CreateEntryResponse, error)
@@ -384,6 +395,9 @@ type SeaweedFilerServer interface {
 type UnimplementedSeaweedFilerServer struct {
 }
 
+func (UnimplementedSeaweedFilerServer) CreateHardLink(context.Context, *CreateHardLinkRequest) (*CreateHardLinkResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateHardLink not implemented")
+}
 func (UnimplementedSeaweedFilerServer) LookupDirectoryEntry(context.Context, *LookupDirectoryEntryRequest) (*LookupDirectoryEntryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LookupDirectoryEntry not implemented")
 }
@@ -458,6 +472,24 @@ type UnsafeSeaweedFilerServer interface {
 
 func RegisterSeaweedFilerServer(s grpc.ServiceRegistrar, srv SeaweedFilerServer) {
 	s.RegisterService(&SeaweedFiler_ServiceDesc, srv)
+}
+
+func _SeaweedFiler_CreateHardLink_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateHardLinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SeaweedFilerServer).CreateHardLink(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/filer_pb.SeaweedFiler/CreateHardLink",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SeaweedFilerServer).CreateHardLink(ctx, req.(*CreateHardLinkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _SeaweedFiler_LookupDirectoryEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -865,6 +897,10 @@ var SeaweedFiler_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "filer_pb.SeaweedFiler",
 	HandlerType: (*SeaweedFilerServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateHardLink",
+			Handler:    _SeaweedFiler_CreateHardLink_Handler,
+		},
 		{
 			MethodName: "LookupDirectoryEntry",
 			Handler:    _SeaweedFiler_LookupDirectoryEntry_Handler,
