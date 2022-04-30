@@ -8,10 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/pb"
-
 	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/filesys"
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/operation"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
@@ -43,7 +40,7 @@ func (fs *FilerServer) CreateHardLink(ctx context.Context, req *filer_pb.CreateH
 
 	// update old file to hardlink mode
 	if len(oldEntry.HardLinkId) == 0 {
-		oldEntry.HardLinkId = append(util.RandomBytes(16), filesys.HARD_LINK_MARKER)
+		oldEntry.HardLinkId = append(util.RandomBytes(16), filer.HARD_LINK_MARKER)
 		oldEntry.HardLinkCounter = 1
 	}
 	oldEntry.HardLinkCounter++

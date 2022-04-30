@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/util/mem"
 	"io"
 	"math"
 	"mime"
@@ -15,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/util/mem"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/glog"
@@ -210,9 +211,9 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 			resizePath := MakeThumbPath(etag, width, height)
 			resizeEntry, err := fs.filer.FindEntry(context.Background(), resizePath)
 			if err == nil {
-				data := mem.Allocate(resizeEntry.Size())
+				data := mem.Allocate(int(resizeEntry.Size()))
 				defer mem.Free(data)
-				err := filer.ReadAll(fs.filer.MasterClient, resizeEntry.Chunks)
+				err := filer.ReadAll(data, fs.filer.MasterClient, resizeEntry.Chunks)
 				if err == nil {
 					io.Copy(w, bytes.NewReader(data))
 					return
@@ -221,7 +222,7 @@ func (fs *FilerServer) GetOrHeadHandler(w http.ResponseWriter, r *http.Request) 
 
 			data := mem.Allocate(int(totalSize))
 			defer mem.Free(data)
-			err := filer.ReadAll(fs.filer.MasterClient, entry.Chunks)
+			err = filer.ReadAll(data, fs.filer.MasterClient, entry.Chunks)
 			if err != nil {
 				glog.Errorf("failed to read %s: %v", path, err)
 				w.WriteHeader(http.StatusNotModified)
