@@ -50,6 +50,9 @@ service SeaweedFiler {
     rpc Statistics (StatisticsRequest) returns (StatisticsResponse) {
     }
 
+    rpc Ping (PingRequest) returns (PingResponse) {
+    }
+
     rpc GetFilerConfiguration (GetFilerConfigurationRequest) returns (GetFilerConfigurationResponse) {
     }
 
@@ -116,6 +119,7 @@ message Entry {
     bytes content = 9; // if not empty, the file content
 
     RemoteEntry remote_entry = 10;
+    int64 quota = 11; // for bucket only. Positive/Negative means enabled/disabled.
 }
 
 message FullEntry {
@@ -172,6 +176,8 @@ message FuseAttributes {
     string symlink_target = 13;
     bytes md5 = 14;
     string disk_type = 15;
+    uint32 rdev = 16;
+    uint64 inode = 17;
 }
 
 message CreateHardLinkRequest {
@@ -191,6 +197,7 @@ message CreateEntryRequest {
     bool o_excl = 3;
     bool is_from_other_cluster = 4;
     repeated int32 signatures = 5;
+    bool skip_check_parent_directory = 6;
 }
 
 message CreateEntryResponse {
@@ -318,6 +325,16 @@ message StatisticsResponse {
     uint64 total_size = 4;
     uint64 used_size = 5;
     uint64 file_count = 6;
+}
+
+message PingRequest {
+    string target = 1; // default to ping itself
+    string target_type = 2;
+}
+message PingResponse {
+    int64 start_time_ns = 1;
+    int64 remote_time_ns = 2;
+    int64 stop_time_ns = 3;
 }
 
 message GetFilerConfigurationRequest {

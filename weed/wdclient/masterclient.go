@@ -2,6 +2,7 @@ package wdclient
 
 import (
 	"context"
+	"github.com/chrislusf/seaweedfs/weed/stats"
 	"math/rand"
 	"time"
 
@@ -17,7 +18,7 @@ type MasterClient struct {
 	clientType     string
 	clientHost     pb.ServerAddress
 	currentMaster  pb.ServerAddress
-	masters        []pb.ServerAddress
+	masters        map[string]pb.ServerAddress
 	grpcDialOption grpc.DialOption
 
 	vidMap
@@ -25,7 +26,7 @@ type MasterClient struct {
 	OnPeerUpdate func(update *master_pb.ClusterNodeUpdate)
 }
 
-func NewMasterClient(grpcDialOption grpc.DialOption, clientType string, clientHost pb.ServerAddress, clientDataCenter string, masters []pb.ServerAddress) *MasterClient {
+func NewMasterClient(grpcDialOption grpc.DialOption, clientType string, clientHost pb.ServerAddress, clientDataCenter string, masters map[string]pb.ServerAddress) *MasterClient {
 	return &MasterClient{
 		clientType:     clientType,
 		clientHost:     clientHost,
@@ -38,6 +39,11 @@ func NewMasterClient(grpcDialOption grpc.DialOption, clientType string, clientHo
 func (mc *MasterClient) GetMaster() pb.ServerAddress {
 	mc.WaitUntilConnected()
 	return mc.currentMaster
+}
+
+func (mc *MasterClient) GetMasters() map[string]pb.ServerAddress {
+	mc.WaitUntilConnected()
+	return mc.masters
 }
 
 func (mc *MasterClient) WaitUntilConnected() {
@@ -96,14 +102,15 @@ func (mc *MasterClient) tryAllMasters() {
 
 func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedLeader pb.ServerAddress) {
 	glog.V(1).Infof("%s masterClient Connecting to master %v", mc.clientType, master)
+	stats.MasterClientConnectCounter.WithLabelValues("total").Inc()
 	gprcErr := pb.WithMasterClient(true, master, mc.grpcDialOption, func(client master_pb.SeaweedClient) error {
-
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		stream, err := client.KeepConnected(ctx)
 		if err != nil {
 			glog.V(1).Infof("%s masterClient failed to keep connected to %s: %v", mc.clientType, master, err)
+			stats.MasterClientConnectCounter.WithLabelValues(stats.FailedToKeepConnected).Inc()
 			return err
 		}
 
@@ -113,6 +120,7 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 			Version:       util.Version(),
 		}); err != nil {
 			glog.V(0).Infof("%s masterClient failed to send to %s: %v", mc.clientType, master, err)
+			stats.MasterClientConnectCounter.WithLabelValues(stats.FailedToSend).Inc()
 			return err
 		}
 
@@ -123,6 +131,7 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 			resp, err := stream.Recv()
 			if err != nil {
 				glog.V(0).Infof("%s masterClient failed to receive from %s: %v", mc.clientType, master, err)
+				stats.MasterClientConnectCounter.WithLabelValues(stats.FailedToReceive).Inc()
 				return err
 			}
 
@@ -131,6 +140,7 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 				if resp.VolumeLocation.Leader != "" {
 					glog.V(0).Infof("redirected to leader %v", resp.VolumeLocation.Leader)
 					nextHintedLeader = pb.ServerAddress(resp.VolumeLocation.Leader)
+					stats.MasterClientConnectCounter.WithLabelValues(stats.RedirectedToleader).Inc()
 					return nil
 				}
 
@@ -149,6 +159,14 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 					glog.V(1).Infof("%s: %s masterClient removes volume %d", mc.clientType, loc.Url, deletedVid)
 					mc.deleteLocation(deletedVid, loc)
 				}
+				for _, newEcVid := range resp.VolumeLocation.NewEcVids {
+					glog.V(1).Infof("%s: %s masterClient adds ec volume %d", mc.clientType, loc.Url, newEcVid)
+					mc.addEcLocation(newEcVid, loc)
+				}
+				for _, deletedEcVid := range resp.VolumeLocation.DeletedEcVids {
+					glog.V(1).Infof("%s: %s masterClient removes ec volume %d", mc.clientType, loc.Url, deletedEcVid)
+					mc.deleteEcLocation(deletedEcVid, loc)
+				}
 			}
 
 			if resp.ClusterNodeUpdate != nil {
@@ -159,6 +177,7 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 					} else {
 						glog.V(0).Infof("- %s %s leader:%v\n", update.NodeType, update.Address, update.IsLeader)
 					}
+					stats.MasterClientConnectCounter.WithLabelValues(stats.OnPeerUpdate).Inc()
 					mc.OnPeerUpdate(update)
 				}
 			}
@@ -167,6 +186,7 @@ func (mc *MasterClient) tryConnectToMaster(master pb.ServerAddress) (nextHintedL
 
 	})
 	if gprcErr != nil {
+		stats.MasterClientConnectCounter.WithLabelValues(stats.Failed).Inc()
 		glog.V(1).Infof("%s masterClient failed to connect with master %v: %v", mc.clientType, master, gprcErr)
 	}
 	return

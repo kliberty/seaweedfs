@@ -130,6 +130,10 @@ func isAppend(r *http.Request) bool {
 	return r.URL.Query().Get("op") == "append"
 }
 
+func skipCheckParentDirEntry(r *http.Request) bool {
+	return r.URL.Query().Get("skipCheckParentDir") == "true"
+}
+
 func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileName string, contentType string, so *operation.StorageOption, md5bytes []byte, fileChunks []*filer_pb.FileChunk, chunkOffset int64, content []byte) (filerResult *FilerPostResult, replyerr error) {
 
 	// detect file mode
@@ -160,9 +164,13 @@ func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileNa
 	}
 
 	var entry *filer.Entry
+	var newChunks []*filer_pb.FileChunk
 	var mergedChunks []*filer_pb.FileChunk
+
+	isAppend := isAppend(r)
+	isOffsetWrite := len(fileChunks) > 0 && fileChunks[0].Offset > 0
 	// when it is an append
-	if isAppend(r) {
+	if isAppend || isOffsetWrite {
 		existingEntry, findErr := fs.filer.FindEntry(ctx, util.FullPath(path))
 		if findErr != nil && findErr != filer_pb.ErrNotFound {
 			glog.V(0).Infof("failing to find %s: %v", path, findErr)
@@ -173,11 +181,13 @@ func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileNa
 		entry.Mtime = time.Now()
 		entry.Md5 = nil
 		// adjust chunk offsets
-		for _, chunk := range fileChunks {
-			chunk.Offset += int64(entry.FileSize)
+		if isAppend {
+			for _, chunk := range fileChunks {
+				chunk.Offset += int64(entry.FileSize)
+			}
+			entry.FileSize += uint64(chunkOffset)
 		}
-		mergedChunks = append(entry.Chunks, fileChunks...)
-		entry.FileSize += uint64(chunkOffset)
+		newChunks = append(entry.Chunks, fileChunks...)
 
 		// TODO
 		if len(entry.Content) > 0 {
@@ -187,7 +197,7 @@ func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileNa
 
 	} else {
 		glog.V(4).Infoln("saving", path)
-		mergedChunks = fileChunks
+		newChunks = fileChunks
 		entry = &filer.Entry{
 			FullPath: util.FullPath(path),
 			Attr: filer.Attr{
@@ -208,6 +218,13 @@ func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileNa
 		}
 	}
 
+	// maybe concatenate small chunks into one whole chunk
+	mergedChunks, replyerr = fs.maybeMergeChunks(so, newChunks)
+	if replyerr != nil {
+		glog.V(0).Infof("merge chunks %s: %v", r.RequestURI, replyerr)
+		mergedChunks = newChunks
+	}
+
 	// maybe compact entry chunks
 	mergedChunks, replyerr = filer.MaybeManifestize(fs.saveAsChunk(so), mergedChunks)
 	if replyerr != nil {
@@ -215,6 +232,10 @@ func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileNa
 		return
 	}
 	entry.Chunks = mergedChunks
+	if isOffsetWrite {
+		entry.Md5 = nil
+		entry.FileSize = entry.Size()
+	}
 
 	filerResult = &FilerPostResult{
 		Name: fileName,
@@ -234,7 +255,7 @@ func (fs *FilerServer) saveMetaData(ctx context.Context, r *http.Request, fileNa
 		}
 	}
 
-	if dbErr := fs.filer.CreateEntry(ctx, entry, false, false, nil); dbErr != nil {
+	if dbErr := fs.filer.CreateEntry(ctx, entry, false, false, nil, skipCheckParentDirEntry(r)); dbErr != nil {
 		replyerr = dbErr
 		filerResult.Error = dbErr.Error()
 		glog.V(0).Infof("failing to write %s to filer server : %v", path, dbErr)
@@ -311,7 +332,7 @@ func (fs *FilerServer) mkdir(ctx context.Context, w http.ResponseWriter, r *http
 		Name: util.FullPath(path).Name(),
 	}
 
-	if dbErr := fs.filer.CreateEntry(ctx, entry, false, false, nil); dbErr != nil {
+	if dbErr := fs.filer.CreateEntry(ctx, entry, false, false, nil, false); dbErr != nil {
 		replyerr = dbErr
 		filerResult.Error = dbErr.Error()
 		glog.V(0).Infof("failing to create dir %s on filer server : %v", path, dbErr)

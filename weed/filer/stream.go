@@ -3,6 +3,7 @@ package filer
 import (
 	"bytes"
 	"fmt"
+	"golang.org/x/exp/slices"
 	"io"
 	"math"
 	"sort"
@@ -39,11 +40,11 @@ func isSameChunks(a, b []*filer_pb.FileChunk) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	sort.Slice(a, func(i, j int) bool {
-		return strings.Compare(a[i].ETag, a[j].ETag) < 0
+	slices.SortFunc(a, func(i, j *filer_pb.FileChunk) bool {
+		return strings.Compare(i.ETag, j.ETag) < 0
 	})
-	sort.Slice(b, func(i, j int) bool {
-		return strings.Compare(b[i].ETag, b[j].ETag) < 0
+	slices.SortFunc(b, func(i, j *filer_pb.FileChunk) bool {
+		return strings.Compare(i.ETag, j.ETag) < 0
 	})
 	for i := 0; i < len(a); i++ {
 		if a[i].ETag != b[i].ETag {
@@ -62,7 +63,7 @@ func NewFileReader(filerClient filer_pb.FilerClient, entry *filer_pb.Entry) io.R
 
 func StreamContent(masterClient wdclient.HasLookupFileIdFunction, writer io.Writer, chunks []*filer_pb.FileChunk, offset int64, size int64) error {
 
-	glog.V(9).Infof("start to stream content for chunks: %+v\n", chunks)
+	glog.V(4).Infof("start to stream content for chunks: %+v", chunks)
 	chunkViews := ViewFromChunks(masterClient.GetLookupFileIdFunction(), chunks, offset, size)
 
 	fileId2Url := make(map[string][]string)
@@ -104,10 +105,12 @@ func StreamContent(masterClient wdclient.HasLookupFileIdFunction, writer io.Writ
 		}
 		stats.FilerRequestCounter.WithLabelValues("chunkDownload").Inc()
 	}
-	glog.V(4).Infof("zero [%d,%d)", offset, offset+remaining)
-	err := writeZero(writer, remaining)
-	if err != nil {
-		return fmt.Errorf("write zero [%d,%d)", offset, offset+remaining)
+	if remaining > 0 {
+		glog.V(4).Infof("zero [%d,%d)", offset, offset+remaining)
+		err := writeZero(writer, remaining)
+		if err != nil {
+			return fmt.Errorf("write zero [%d,%d)", offset, offset+remaining)
+		}
 	}
 
 	return nil
@@ -133,30 +136,30 @@ func writeZero(w io.Writer, size int64) (err error) {
 	return
 }
 
-func ReadAll(masterClient *wdclient.MasterClient, chunks []*filer_pb.FileChunk) ([]byte, error) {
-
-	buffer := bytes.Buffer{}
+func ReadAll(buffer []byte, masterClient *wdclient.MasterClient, chunks []*filer_pb.FileChunk) error {
 
 	lookupFileIdFn := func(fileId string) (targetUrls []string, err error) {
 		return masterClient.LookupFileId(fileId)
 	}
 
-	chunkViews := ViewFromChunks(lookupFileIdFn, chunks, 0, math.MaxInt64)
+	chunkViews := ViewFromChunks(lookupFileIdFn, chunks, 0, int64(len(buffer)))
+
+	idx := 0
 
 	for _, chunkView := range chunkViews {
 		urlStrings, err := lookupFileIdFn(chunkView.FileId)
 		if err != nil {
 			glog.V(1).Infof("operation LookupFileId %s failed, err: %v", chunkView.FileId, err)
-			return nil, err
+			return err
 		}
 
-		data, err := retriedFetchChunkData(urlStrings, chunkView.CipherKey, chunkView.IsGzipped, chunkView.IsFullChunk(), chunkView.Offset, int(chunkView.Size))
+		n, err := retriedFetchChunkData(buffer[idx:idx+int(chunkView.Size)], urlStrings, chunkView.CipherKey, chunkView.IsGzipped, chunkView.IsFullChunk(), chunkView.Offset)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		buffer.Write(data)
+		idx += n
 	}
-	return buffer.Bytes(), nil
+	return nil
 }
 
 // ----------------  ChunkStreamReader ----------------------------------
@@ -177,8 +180,8 @@ var _ = io.ReaderAt(&ChunkStreamReader{})
 func doNewChunkStreamReader(lookupFileIdFn wdclient.LookupFileIdFunctionType, chunks []*filer_pb.FileChunk) *ChunkStreamReader {
 
 	chunkViews := ViewFromChunks(lookupFileIdFn, chunks, 0, math.MaxInt64)
-	sort.Slice(chunkViews, func(i, j int) bool {
-		return chunkViews[i].LogicOffset < chunkViews[j].LogicOffset
+	slices.SortFunc(chunkViews, func(a, b *ChunkView) bool {
+		return a.LogicOffset < b.LogicOffset
 	})
 
 	var totalSize int64

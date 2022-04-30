@@ -262,16 +262,19 @@ func genProcessFunction(sourcePath string, targetPath string, dataSink sink.Repl
 		}
 
 		// handle deletions
-		if message.OldEntry != nil && message.NewEntry == nil {
+		if filer_pb.IsDelete(resp) {
 			if !strings.HasPrefix(string(sourceOldKey), sourcePath) {
 				return nil
 			}
 			key := buildKey(dataSink, message, targetPath, sourceOldKey, sourcePath)
-			return dataSink.DeleteEntry(key, message.OldEntry.IsDirectory, message.DeleteChunks, message.Signatures)
+			if !dataSink.IsIncremental() {
+				return dataSink.DeleteEntry(key, message.OldEntry.IsDirectory, message.DeleteChunks, message.Signatures)
+			}
+			return nil
 		}
 
 		// handle new entries
-		if message.OldEntry == nil && message.NewEntry != nil {
+		if filer_pb.IsCreate(resp) {
 			if !strings.HasPrefix(string(sourceNewKey), sourcePath) {
 				return nil
 			}
@@ -280,7 +283,7 @@ func genProcessFunction(sourcePath string, targetPath string, dataSink sink.Repl
 		}
 
 		// this is something special?
-		if message.OldEntry == nil && message.NewEntry == nil {
+		if filer_pb.IsEmpty(resp) {
 			return nil
 		}
 

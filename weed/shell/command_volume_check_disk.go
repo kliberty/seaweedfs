@@ -9,9 +9,9 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
 	"github.com/chrislusf/seaweedfs/weed/storage/needle_map"
+	"golang.org/x/exp/slices"
 	"io"
 	"math"
-	"sort"
 )
 
 func init() {
@@ -58,7 +58,7 @@ func (c *commandVolumeCheckDisk) Do(args []string, commandEnv *CommandEnv, write
 	c.env = commandEnv
 
 	// collect topology information
-	topologyInfo, _, err := collectTopologyInfo(commandEnv)
+	topologyInfo, _, err := collectTopologyInfo(commandEnv, 0)
 	if err != nil {
 		return err
 	}
@@ -70,8 +70,8 @@ func (c *commandVolumeCheckDisk) Do(args []string, commandEnv *CommandEnv, write
 	}
 
 	for _, replicas := range volumeReplicas {
-		sort.Slice(replicas, func(i, j int) bool {
-			return fileCount(replicas[i]) > fileCount(replicas[j])
+		slices.SortFunc(replicas, func(a, b *VolumeReplica) bool {
+			return fileCount(a) > fileCount(b)
 		})
 		for len(replicas) >= 2 {
 			a, b := replicas[0], replicas[1]
@@ -138,9 +138,9 @@ func (c *commandVolumeCheckDisk) doVolumeCheckDisk(minuend, subtrahend *needle_m
 	// hash join, can be more efficient
 	var missingNeedles []needle_map.NeedleValue
 	var counter int
-	subtrahend.AscendingVisit(func(value needle_map.NeedleValue) error {
+	minuend.AscendingVisit(func(value needle_map.NeedleValue) error {
 		counter++
-		if _, found := minuend.Get(value.Key); !found {
+		if _, found := subtrahend.Get(value.Key); !found {
 			missingNeedles = append(missingNeedles, value)
 		}
 		return nil

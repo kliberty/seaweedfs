@@ -1,17 +1,19 @@
 package s3api
 
 import (
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
+	"golang.org/x/exp/slices"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/google/uuid"
 
 	"github.com/chrislusf/seaweedfs/weed/filer"
 	"github.com/chrislusf/seaweedfs/weed/glog"
@@ -27,8 +29,7 @@ func (s3a *S3ApiServer) createMultipartUpload(input *s3.CreateMultipartUploadInp
 
 	glog.V(2).Infof("createMultipartUpload input %v", input)
 
-	uploadId, _ := uuid.NewRandom()
-	uploadIdString := uploadId.String()
+	uploadIdString := s3a.generateUploadID(*input.Key)
 
 	if err := s3a.mkdir(s3a.genUploadsFolder(*input.Bucket), uploadIdString, func(entry *filer_pb.Entry) {
 		if entry.Extended == nil {
@@ -62,9 +63,14 @@ type CompleteMultipartUploadResult struct {
 	s3.CompleteMultipartUploadOutput
 }
 
-func (s3a *S3ApiServer) completeMultipartUpload(input *s3.CompleteMultipartUploadInput) (output *CompleteMultipartUploadResult, code s3err.ErrorCode) {
+func (s3a *S3ApiServer) completeMultipartUpload(input *s3.CompleteMultipartUploadInput, parts *CompleteMultipartUpload) (output *CompleteMultipartUploadResult, code s3err.ErrorCode) {
 
 	glog.V(2).Infof("completeMultipartUpload input %v", input)
+
+	completedParts := parts.Parts
+	slices.SortFunc(completedParts, func(a, b CompletedPart) bool {
+		return a.PartNumber < b.PartNumber
+	})
 
 	uploadDirectory := s3a.genUploadsFolder(*input.Bucket) + "/" + *input.UploadId
 
@@ -80,14 +86,21 @@ func (s3a *S3ApiServer) completeMultipartUpload(input *s3.CompleteMultipartUploa
 		return nil, s3err.ErrNoSuchUpload
 	}
 
+	mime := pentry.Attributes.Mime
+
 	var finalParts []*filer_pb.FileChunk
 	var offset int64
-	var mime string
 
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name, ".part") && !entry.IsDirectory {
-			if entry.Name == "0001.part" && entry.Attributes.Mime != "" {
-				mime = entry.Attributes.Mime
+			partETag, found := findByPartNumber(entry.Name, completedParts)
+			if !found {
+				continue
+			}
+			entryETag := hex.EncodeToString(entry.Attributes.GetMd5())
+			if partETag != "" && len(partETag) == 32 && entryETag != "" && entryETag != partETag {
+				glog.Errorf("completeMultipartUpload %s ETag mismatch chunk: %s part: %s", entry.Name, entryETag, partETag)
+				return nil, s3err.ErrInvalidPart
 			}
 			for _, chunk := range entry.Chunks {
 				p := &filer_pb.FileChunk{
@@ -154,6 +167,28 @@ func (s3a *S3ApiServer) completeMultipartUpload(input *s3.CompleteMultipartUploa
 	}
 
 	return
+}
+
+func findByPartNumber(fileName string, parts []CompletedPart) (etag string, found bool) {
+	partNumber, formatErr := strconv.Atoi(fileName[:4])
+	if formatErr != nil {
+		return
+	}
+	x := sort.Search(len(parts), func(i int) bool {
+		return parts[i].PartNumber >= partNumber
+	})
+	if parts[x].PartNumber != partNumber {
+		return
+	}
+	y := 0
+	for i, part := range parts[x:] {
+		if part.PartNumber == partNumber {
+			y = i
+		} else {
+			break
+		}
+	}
+	return parts[x+y].ETag, true
 }
 
 func (s3a *S3ApiServer) abortMultipartUpload(input *s3.AbortMultipartUploadInput) (output *s3.AbortMultipartUploadOutput, code s3err.ErrorCode) {
@@ -270,6 +305,9 @@ func (s3a *S3ApiServer) listObjectParts(input *s3.ListPartsInput) (output *ListP
 		glog.Errorf("listObjectParts %s %s error: %v", *input.Bucket, *input.UploadId, err)
 		return nil, s3err.ErrNoSuchUpload
 	}
+
+	// Note: The upload directory is sort of a marker of the existence of an multipart upload request.
+	// So can not just delete empty upload folders.
 
 	output.IsTruncated = aws.Bool(!isLast)
 

@@ -7,10 +7,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"github.com/chrislusf/seaweedfs/weed/security"
+	"github.com/chrislusf/seaweedfs/weed/util/mem"
+	"golang.org/x/exp/slices"
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -26,16 +27,9 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/util"
 )
 
-var (
-	client *http.Client
+const (
+	deleteMultipleObjectsLimmit = 1000
 )
-
-func init() {
-	client = &http.Client{Transport: &http.Transport{
-		MaxIdleConns:        1024,
-		MaxIdleConnsPerHost: 1024,
-	}}
-}
 
 func mimeDetect(r *http.Request, dataReader io.Reader) io.ReadCloser {
 	mimeBuffer := make([]byte, 512)
@@ -69,7 +63,7 @@ func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request)
 
 	if r.Header.Get("Expires") != "" {
 		if _, err = time.Parse(http.TimeFormat, r.Header.Get("Expires")); err != nil {
-			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidDigest)
+			s3err.WriteErrorResponse(w, r, s3err.ErrMalformedExpires)
 			return
 		}
 	}
@@ -104,8 +98,7 @@ func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	} else {
-		uploadUrl := fmt.Sprintf("http://%s%s/%s%s", s3a.option.Filer.ToHttpAddress(), s3a.option.BucketsPath, bucket, urlPathEscape(object))
-
+		uploadUrl := s3a.toFilerUrl(bucket, object)
 		if r.Header.Get("Content-Type") == "" {
 			dataReader = mimeDetect(r, dataReader)
 		}
@@ -131,6 +124,12 @@ func urlPathEscape(object string) string {
 	return strings.Join(escapedParts, "/")
 }
 
+func (s3a *S3ApiServer) toFilerUrl(bucket, object string) string {
+	destUrl := fmt.Sprintf("http://%s%s/%s%s",
+		s3a.option.Filer.ToHttpAddress(), s3a.option.BucketsPath, bucket, urlPathEscape(object))
+	return destUrl
+}
+
 func (s3a *S3ApiServer) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	bucket, object := xhttp.GetBucketAndObject(r)
@@ -141,8 +140,7 @@ func (s3a *S3ApiServer) GetObjectHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	destUrl := fmt.Sprintf("http://%s%s/%s%s",
-		s3a.option.Filer.ToHttpAddress(), s3a.option.BucketsPath, bucket, urlPathEscape(object))
+	destUrl := s3a.toFilerUrl(bucket, object)
 
 	s3a.proxyToFiler(w, r, destUrl, false, passThroughResponse)
 }
@@ -152,8 +150,7 @@ func (s3a *S3ApiServer) HeadObjectHandler(w http.ResponseWriter, r *http.Request
 	bucket, object := xhttp.GetBucketAndObject(r)
 	glog.V(3).Infof("HeadObjectHandler %s %s", bucket, object)
 
-	destUrl := fmt.Sprintf("http://%s%s/%s%s",
-		s3a.option.Filer.ToHttpAddress(), s3a.option.BucketsPath, bucket, urlPathEscape(object))
+	destUrl := s3a.toFilerUrl(bucket, object)
 
 	s3a.proxyToFiler(w, r, destUrl, false, passThroughResponse)
 }
@@ -163,8 +160,7 @@ func (s3a *S3ApiServer) DeleteObjectHandler(w http.ResponseWriter, r *http.Reque
 	bucket, object := xhttp.GetBucketAndObject(r)
 	glog.V(3).Infof("DeleteObjectHandler %s %s", bucket, object)
 
-	destUrl := fmt.Sprintf("http://%s%s/%s%s?recursive=true",
-		s3a.option.Filer.ToHttpAddress(), s3a.option.BucketsPath, bucket, urlPathEscape(object))
+	destUrl := s3a.toFilerUrl(bucket, object)
 
 	s3a.proxyToFiler(w, r, destUrl, true, func(proxyResponse *http.Response, w http.ResponseWriter) (statusCode int) {
 		statusCode = http.StatusNoContent
@@ -222,6 +218,11 @@ func (s3a *S3ApiServer) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *h
 	deleteObjects := &DeleteObjectsRequest{}
 	if err := xml.Unmarshal(deleteXMLBytes, deleteObjects); err != nil {
 		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
+		return
+	}
+
+	if len(deleteObjects.Objects) > deleteMultipleObjectsLimmit {
+		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidMaxDeleteObjects)
 		return
 	}
 
@@ -289,8 +290,8 @@ func (s3a *S3ApiServer) doDeleteEmptyDirectories(client filer_pb.SeaweedFilerCli
 	for dir, _ := range directoriesWithDeletion {
 		allDirs = append(allDirs, dir)
 	}
-	sort.Slice(allDirs, func(i, j int) bool {
-		return len(allDirs[i]) > len(allDirs[j])
+	slices.SortFunc(allDirs, func(a, b string) bool {
+		return len(a) > len(b)
 	})
 	newDirectoriesWithDeletion = make(map[string]int)
 	for _, dir := range allDirs {
@@ -332,7 +333,7 @@ func (s3a *S3ApiServer) proxyToFiler(w http.ResponseWriter, r *http.Request, des
 	// ensure that the Authorization header is overriding any previous
 	// Authorization header which might be already present in proxyReq
 	s3a.maybeAddFilerJwtAuthorization(proxyReq, isWrite)
-	resp, postErr := client.Do(proxyReq)
+	resp, postErr := s3a.client.Do(proxyReq)
 
 	if postErr != nil {
 		glog.Errorf("post to filer: %v", postErr)
@@ -368,7 +369,9 @@ func passThroughResponse(proxyResponse *http.Response, w http.ResponseWriter) (s
 		statusCode = proxyResponse.StatusCode
 	}
 	w.WriteHeader(statusCode)
-	if n, err := io.Copy(w, proxyResponse.Body); err != nil {
+	buf := mem.Allocate(128 * 1024)
+	defer mem.Free(buf)
+	if n, err := io.CopyBuffer(w, proxyResponse.Body, buf); err != nil {
 		glog.V(1).Infof("passthrough response read %d bytes: %v", n, err)
 	}
 	return statusCode
@@ -396,7 +399,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, uploadUrl string, dataReader
 	// ensure that the Authorization header is overriding any previous
 	// Authorization header which might be already present in proxyReq
 	s3a.maybeAddFilerJwtAuthorization(proxyReq, true)
-	resp, postErr := client.Do(proxyReq)
+	resp, postErr := s3a.client.Do(proxyReq)
 
 	if postErr != nil {
 		glog.Errorf("post to filer: %v", postErr)
@@ -436,10 +439,14 @@ func setEtag(w http.ResponseWriter, etag string) {
 }
 
 func filerErrorToS3Error(errString string) s3err.ErrorCode {
-	if strings.HasPrefix(errString, "existing ") && strings.HasSuffix(errString, "is a directory") {
+	switch {
+	case strings.HasPrefix(errString, "existing ") && strings.HasSuffix(errString, "is a directory"):
 		return s3err.ErrExistingObjectIsDirectory
+	case strings.HasSuffix(errString, "is a file"):
+		return s3err.ErrExistingObjectIsFile
+	default:
+		return s3err.ErrInternalError
 	}
-	return s3err.ErrInternalError
 }
 
 func (s3a *S3ApiServer) maybeAddFilerJwtAuthorization(r *http.Request, isWrite bool) {

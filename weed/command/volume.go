@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
 	"net/http"
 	httppprof "net/http/pprof"
 	"os"
@@ -10,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/storage/types"
 
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
@@ -24,7 +25,7 @@ import (
 
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/server"
+	weed_server "github.com/chrislusf/seaweedfs/weed/server"
 	stats_collect "github.com/chrislusf/seaweedfs/weed/stats"
 	"github.com/chrislusf/seaweedfs/weed/storage"
 	"github.com/chrislusf/seaweedfs/weed/util"
@@ -74,7 +75,7 @@ func init() {
 	v.publicPort = cmdVolume.Flag.Int("port.public", 0, "port opened to public")
 	v.ip = cmdVolume.Flag.String("ip", util.DetectedHostAddress(), "ip or server name, also used as identifier")
 	v.publicUrl = cmdVolume.Flag.String("publicUrl", "", "Publicly accessible address")
-	v.bindIp = cmdVolume.Flag.String("ip.bind", "", "ip address to bind to")
+	v.bindIp = cmdVolume.Flag.String("ip.bind", "", "ip address to bind to. If empty, default to same as -ip option.")
 	v.mastersString = cmdVolume.Flag.String("mserver", "localhost:9333", "comma-separated master servers")
 	v.preStopSeconds = cmdVolume.Flag.Int("preStopSeconds", 10, "number of seconds between stop send heartbeats and stop volume server")
 	// v.pulseSeconds = cmdVolume.Flag.Int("pulseSeconds", 5, "number of seconds between heartbeats, must be smaller than or equal to the master's setting")
@@ -94,7 +95,7 @@ func init() {
 	v.pprof = cmdVolume.Flag.Bool("pprof", false, "enable pprof http handlers. precludes --memprofile and --cpuprofile")
 	v.metricsHttpPort = cmdVolume.Flag.Int("metricsPort", 0, "Prometheus metrics listen port")
 	v.idxFolder = cmdVolume.Flag.String("dir.idx", "", "directory to store .idx files")
-	v.enableTcp = cmdVolume.Flag.Bool("tcp", false, "<exprimental> enable tcp port")
+	v.enableTcp = cmdVolume.Flag.Bool("tcp", false, "<experimental> enable tcp port")
 }
 
 var cmdVolume = &Command{
@@ -192,6 +193,9 @@ func (v VolumeServerOptions) startVolumeServer(volumeFolders, maxVolumeCounts, v
 	if *v.ip == "" {
 		*v.ip = util.DetectedHostAddress()
 		glog.V(0).Infof("detected volume server ip address: %v", *v.ip)
+	}
+	if *v.bindIp == "" {
+		*v.bindIp = *v.ip
 	}
 
 	if *v.publicPort == 0 {
@@ -364,11 +368,18 @@ func (v VolumeServerOptions) startClusterHttpService(handler http.Handler) httpd
 	}
 
 	httpDown := httpdown.HTTP{
-		KillTimeout: 5 * time.Minute,
-		StopTimeout: 5 * time.Minute,
+		KillTimeout: time.Minute,
+		StopTimeout: 30 * time.Second,
 		CertFile:    certFile,
 		KeyFile:     keyFile}
-	clusterHttpServer := httpDown.Serve(&http.Server{Handler: handler}, listener)
+	httpS := &http.Server{Handler: handler}
+
+	if viper.GetString("https.volume.ca") != "" {
+		clientCertFile := viper.GetString("https.volume.ca")
+		httpS.TLSConfig = security.LoadClientTLSHTTP(clientCertFile)
+	}
+
+	clusterHttpServer := httpDown.Serve(httpS, listener)
 	go func() {
 		if e := clusterHttpServer.Wait(); e != nil {
 			glog.Fatalf("Volume server fail to serve: %v", e)

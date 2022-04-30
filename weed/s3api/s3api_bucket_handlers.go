@@ -3,13 +3,15 @@ package s3api
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/s3api/s3_constants"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
 	"math"
 	"net/http"
 	"time"
+
+	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/chrislusf/seaweedfs/weed/s3api/s3_constants"
+	"github.com/chrislusf/seaweedfs/weed/storage/needle"
 
 	xhttp "github.com/chrislusf/seaweedfs/weed/s3api/http"
 	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
@@ -133,6 +135,7 @@ func (s3a *S3ApiServer) PutBucketHandler(w http.ResponseWriter, r *http.Request)
 		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 		return
 	}
+	w.Header().Set("Location", "/" + bucket)
 	writeSuccessResponseEmpty(w, r)
 }
 
@@ -147,6 +150,15 @@ func (s3a *S3ApiServer) DeleteBucketHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
+		if !s3a.option.AllowDeleteBucketNotEmpty {
+			entries, _, err := s3a.list(s3a.option.BucketsPath+"/"+bucket, "", "", false, 1)
+			if err != nil {
+				return fmt.Errorf("failed to list bucket %s: %v", bucket, err)
+			}
+			if len(entries) > 0 {
+				return errors.New(s3err.GetAPIError(s3err.ErrBucketNotEmpty).Code)
+			}
+		}
 
 		// delete collection
 		deleteCollectionRequest := &filer_pb.DeleteCollectionRequest{
@@ -160,6 +172,15 @@ func (s3a *S3ApiServer) DeleteBucketHandler(w http.ResponseWriter, r *http.Reque
 
 		return nil
 	})
+
+	if err != nil {
+		s3ErrorCode := s3err.ErrInternalError
+		if err.Error() == s3err.GetAPIError(s3err.ErrBucketNotEmpty).Code {
+			s3ErrorCode = s3err.ErrBucketNotEmpty
+		}
+		s3err.WriteErrorResponse(w, r, s3ErrorCode)
+		return
+	}
 
 	err = s3a.rm(s3a.option.BucketsPath, bucket, false, true)
 
@@ -259,7 +280,7 @@ func (s3a *S3ApiServer) GetBucketAclHandler(w http.ResponseWriter, r *http.Reque
 func (s3a *S3ApiServer) GetBucketLifecycleConfigurationHandler(w http.ResponseWriter, r *http.Request) {
 	// collect parameters
 	bucket, _ := xhttp.GetBucketAndObject(r)
-	glog.V(3).Infof("GetBucketAclHandler %s", bucket)
+	glog.V(3).Infof("GetBucketLifecycleConfigurationHandler %s", bucket)
 
 	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
 		s3err.WriteErrorResponse(w, r, err)
@@ -308,4 +329,16 @@ func (s3a *S3ApiServer) DeleteBucketLifecycleHandler(w http.ResponseWriter, r *h
 
 	s3err.WriteEmptyResponse(w, r, http.StatusNoContent)
 
+}
+
+// GetBucketLocationHandler Get bucket location
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
+func (s3a *S3ApiServer) GetBucketLocationHandler(w http.ResponseWriter, r *http.Request) {
+	writeSuccessResponseXML(w, r, LocationConstraint{})
+}
+
+// GetBucketRequestPaymentHandler Get bucket location
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketRequestPayment.html
+func (s3a *S3ApiServer) GetBucketRequestPaymentHandler(w http.ResponseWriter, r *http.Request) {
+	writeSuccessResponseXML(w, r, RequestPaymentConfiguration{Payer: "BucketOwner"})
 }

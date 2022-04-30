@@ -2,8 +2,10 @@ package command
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"google.golang.org/grpc/reflection"
@@ -12,7 +14,7 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
 	"github.com/chrislusf/seaweedfs/weed/security"
-	"github.com/chrislusf/seaweedfs/weed/server"
+	weed_server "github.com/chrislusf/seaweedfs/weed/server"
 	stats_collect "github.com/chrislusf/seaweedfs/weed/stats"
 	"github.com/chrislusf/seaweedfs/weed/util"
 )
@@ -28,7 +30,7 @@ var (
 )
 
 type FilerOptions struct {
-	masters                 []pb.ServerAddress
+	masters                 map[string]pb.ServerAddress
 	mastersString           *string
 	ip                      *string
 	bindIp                  *string
@@ -51,6 +53,7 @@ type FilerOptions struct {
 	concurrentUploadLimitMB *int
 	debug                   *bool
 	debugPort               *int
+	localSocket             *string
 }
 
 func init() {
@@ -58,7 +61,7 @@ func init() {
 	f.mastersString = cmdFiler.Flag.String("master", "localhost:9333", "comma-separated master servers")
 	f.collection = cmdFiler.Flag.String("collection", "", "all data will be stored in this default collection")
 	f.ip = cmdFiler.Flag.String("ip", util.DetectedHostAddress(), "filer server http listen ip address")
-	f.bindIp = cmdFiler.Flag.String("ip.bind", "", "ip address to bind to")
+	f.bindIp = cmdFiler.Flag.String("ip.bind", "", "ip address to bind to. If empty, default to same as -ip option.")
 	f.port = cmdFiler.Flag.Int("port", 8888, "filer server http listen port")
 	f.portGrpc = cmdFiler.Flag.Int("port.grpc", 0, "filer server grpc listen port")
 	f.publicPort = cmdFiler.Flag.Int("port.readonly", 0, "readonly port opened to public")
@@ -76,6 +79,7 @@ func init() {
 	f.concurrentUploadLimitMB = cmdFiler.Flag.Int("concurrentUploadLimitMB", 128, "limit total concurrent upload size")
 	f.debug = cmdFiler.Flag.Bool("debug", false, "serves runtime profiling data, e.g., http://localhost:<debug.port>/debug/pprof/goroutine?debug=2")
 	f.debugPort = cmdFiler.Flag.Int("debug.port", 6060, "http port for debugging")
+	f.localSocket = cmdFiler.Flag.String("localSocket", "", "default to /tmp/seaweedfs-filer-<port>.sock")
 
 	// start s3 on filer
 	filerStartS3 = cmdFiler.Flag.Bool("s3", false, "whether to start S3 gateway")
@@ -86,6 +90,7 @@ func init() {
 	filerS3Options.config = cmdFiler.Flag.String("s3.config", "", "path to the config file")
 	filerS3Options.auditLogConfig = cmdFiler.Flag.String("s3.auditLogConfig", "", "path to the audit log config file")
 	filerS3Options.allowEmptyFolder = cmdFiler.Flag.Bool("s3.allowEmptyFolder", true, "allow empty folders")
+	filerS3Options.allowDeleteBucketNotEmpty = cmdFiler.Flag.Bool("s3.allowDeleteBucketNotEmpty", true, "allow recursive deleting all entries along with bucket")
 
 	// start webdav on filer
 	filerStartWebDav = cmdFiler.Flag.Bool("webdav", false, "whether to start webdav gateway")
@@ -96,10 +101,11 @@ func init() {
 	filerWebDavOptions.tlsPrivateKey = cmdFiler.Flag.String("webdav.key.file", "", "path to the TLS private key file")
 	filerWebDavOptions.tlsCertificate = cmdFiler.Flag.String("webdav.cert.file", "", "path to the TLS certificate file")
 	filerWebDavOptions.cacheDir = cmdFiler.Flag.String("webdav.cacheDir", os.TempDir(), "local cache directory for file chunks")
-	filerWebDavOptions.cacheSizeMB = cmdFiler.Flag.Int64("webdav.cacheCapacityMB", 1000, "local cache capacity in MB")
+	filerWebDavOptions.cacheSizeMB = cmdFiler.Flag.Int64("webdav.cacheCapacityMB", 0, "local cache capacity in MB")
 
 	// start iam on filer
 	filerStartIam = cmdFiler.Flag.Bool("iam", false, "whether to start IAM service")
+	filerIamOptions.ip = cmdFiler.Flag.String("iam.ip", *f.ip, "iam server http listen ip address")
 	filerIamOptions.port = cmdFiler.Flag.Int("iam.port", 8111, "iam server http listen port")
 }
 
@@ -139,11 +145,14 @@ func runFiler(cmd *Command, args []string) bool {
 	if *filerStartS3 {
 		filerS3Options.filer = &filerAddress
 		filerS3Options.bindIp = f.bindIp
+		filerS3Options.localFilerSocket = f.localSocket
 		go func() {
 			time.Sleep(startDelay * time.Second)
 			filerS3Options.startS3Server()
 		}()
 		startDelay++
+	} else {
+		*f.localSocket = ""
 	}
 
 	if *filerStartWebDav {
@@ -164,7 +173,7 @@ func runFiler(cmd *Command, args []string) bool {
 		}()
 	}
 
-	f.masters = pb.ServerAddresses(*f.mastersString).ToAddresses()
+	f.masters = pb.ServerAddresses(*f.mastersString).ToAddressMap()
 
 	f.startFiler()
 
@@ -181,6 +190,9 @@ func (fo *FilerOptions) startFiler() {
 	}
 	if *fo.portGrpc == 0 {
 		*fo.portGrpc = 10000 + *fo.port
+	}
+	if *fo.bindIp == "" {
+		*fo.bindIp = *fo.ip
 	}
 
 	defaultLevelDbDirectory := util.ResolvePath(*fo.defaultLevelDbDirectory + "/filerldb2")
@@ -210,7 +222,7 @@ func (fo *FilerOptions) startFiler() {
 	if *fo.publicPort != 0 {
 		publicListeningAddress := util.JoinHostPort(*fo.bindIp, *fo.publicPort)
 		glog.V(0).Infoln("Start Seaweed filer server", util.Version(), "public at", publicListeningAddress)
-		publicListener, e := util.NewListener(publicListeningAddress, 0)
+		publicListener, localPublicListner, e := util.NewIpAndLocalListeners(*fo.bindIp, *fo.publicPort, 0)
 		if e != nil {
 			glog.Fatalf("Filer server public listener error on port %d:%v", *fo.publicPort, e)
 		}
@@ -219,11 +231,18 @@ func (fo *FilerOptions) startFiler() {
 				glog.Fatalf("Volume server fail to serve public: %v", e)
 			}
 		}()
+		if localPublicListner != nil {
+			go func() {
+				if e := http.Serve(localPublicListner, publicVolumeMux); e != nil {
+					glog.Errorf("Volume server fail to serve public: %v", e)
+				}
+			}()
+		}
 	}
 
 	glog.V(0).Infof("Start Seaweed Filer %s at %s:%d", util.Version(), *fo.ip, *fo.port)
-	filerListener, e := util.NewListener(
-		util.JoinHostPort(*fo.bindIp, *fo.port),
+	filerListener, filerLocalListener, e := util.NewIpAndLocalListeners(
+		*fo.bindIp, *fo.port,
 		time.Duration(10)*time.Second,
 	)
 	if e != nil {
@@ -232,16 +251,42 @@ func (fo *FilerOptions) startFiler() {
 
 	// starting grpc server
 	grpcPort := *fo.portGrpc
-	grpcL, err := util.NewListener(util.JoinHostPort(*fo.bindIp, grpcPort), 0)
+	grpcL, grpcLocalL, err := util.NewIpAndLocalListeners(*fo.bindIp, grpcPort, 0)
 	if err != nil {
 		glog.Fatalf("failed to listen on grpc port %d: %v", grpcPort, err)
 	}
 	grpcS := pb.NewGrpcServer(security.LoadServerTLS(util.GetViper(), "grpc.filer"))
 	filer_pb.RegisterSeaweedFilerServer(grpcS, fs)
 	reflection.Register(grpcS)
+	if grpcLocalL != nil {
+		go grpcS.Serve(grpcLocalL)
+	}
 	go grpcS.Serve(grpcL)
 
 	httpS := &http.Server{Handler: defaultMux}
+	if runtime.GOOS != "windows" {
+		if *fo.localSocket == "" {
+			*fo.localSocket = fmt.Sprintf("/tmp/seaweefs-filer-%d.sock", *fo.port)
+			if err := os.Remove(*fo.localSocket); err != nil && !os.IsNotExist(err) {
+				glog.Fatalf("Failed to remove %s, error: %s", *fo.localSocket, err.Error())
+			}
+		}
+		go func() {
+			// start on local unix socket
+			filerSocketListener, err := net.Listen("unix", *fo.localSocket)
+			if err != nil {
+				glog.Fatalf("Failed to listen on %s: %v", *fo.localSocket, err)
+			}
+			httpS.Serve(filerSocketListener)
+		}()
+	}
+	if filerLocalListener != nil {
+		go func() {
+			if err := httpS.Serve(filerLocalListener); err != nil {
+				glog.Errorf("Filer Fail to serve: %v", e)
+			}
+		}()
+	}
 	if err := httpS.Serve(filerListener); err != nil {
 		glog.Fatalf("Filer Fail to serve: %v", e)
 	}

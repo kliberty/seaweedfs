@@ -174,10 +174,10 @@ func (option *RemoteGatewayOptions) makeBucketedEventProcessor(filerSource *sour
 			return handleEtcRemoteChanges(resp)
 		}
 
-		if message.OldEntry == nil && message.NewEntry == nil {
+		if filer_pb.IsEmpty(resp) {
 			return nil
 		}
-		if message.OldEntry == nil && message.NewEntry != nil {
+		if filer_pb.IsCreate(resp) {
 			if message.NewParentPath == option.bucketsDir {
 				return handleCreateBucket(message.NewEntry)
 			}
@@ -212,7 +212,7 @@ func (option *RemoteGatewayOptions) makeBucketedEventProcessor(filerSource *sour
 			}
 			return updateLocalEntry(&remoteSyncOptions, message.NewParentPath, message.NewEntry, remoteEntry)
 		}
-		if message.OldEntry != nil && message.NewEntry == nil {
+		if filer_pb.IsDelete(resp) {
 			if resp.Directory == option.bucketsDir {
 				return handleDeleteBucket(message.OldEntry)
 			}
@@ -264,7 +264,7 @@ func (option *RemoteGatewayOptions) makeBucketedEventProcessor(filerSource *sour
 						// update directory property
 						return nil
 					}
-					if filer.IsSameData(message.OldEntry, message.NewEntry) {
+					if message.OldEntry.RemoteEntry != nil && filer.IsSameData(message.OldEntry, message.NewEntry) {
 						glog.V(2).Infof("update meta: %+v", resp)
 						oldDest := toRemoteStorageLocation(oldBucket, util.NewFullPath(resp.Directory, message.OldEntry.Name), oldRemoteStorageMountLocation)
 						return client.UpdateFileMetadata(oldDest, message.OldEntry, message.NewEntry)

@@ -48,7 +48,7 @@ import (
 )
 
 type FilerOption struct {
-	Masters               []pb.ServerAddress
+	Masters               map[string]pb.ServerAddress
 	Collection            string
 	DefaultReplication    string
 	DisableDirListing     bool
@@ -130,8 +130,8 @@ func NewFilerServer(defaultMux, readonlyMux *http.ServeMux, option *FilerOption)
 	go fs.filer.KeepMasterClientConnected()
 
 	if !util.LoadConfiguration("filer", false) {
-		v.Set("leveldb2.enabled", true)
-		v.Set("leveldb2.dir", option.DefaultLevelDbDir)
+		v.SetDefault("leveldb2.enabled", true)
+		v.SetDefault("leveldb2.dir", option.DefaultLevelDbDir)
 		_, err := os.Stat(option.DefaultLevelDbDir)
 		if os.IsNotExist(err) {
 			os.MkdirAll(option.DefaultLevelDbDir, 0755)

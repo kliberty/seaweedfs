@@ -3,18 +3,17 @@ package shell
 import (
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
-	"math"
-	"sort"
-
 	"github.com/chrislusf/seaweedfs/weed/glog"
 	"github.com/chrislusf/seaweedfs/weed/operation"
+	"github.com/chrislusf/seaweedfs/weed/pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
 	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
 	"github.com/chrislusf/seaweedfs/weed/storage/erasure_coding"
 	"github.com/chrislusf/seaweedfs/weed/storage/needle"
+	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"golang.org/x/exp/slices"
 	"google.golang.org/grpc"
+	"math"
 )
 
 func moveMountedShardToEcNode(commandEnv *CommandEnv, existingLocation *EcNode, collection string, vid needle.VolumeId, shardId erasure_coding.ShardId, destinationEcNode *EcNode, applyBalancing bool) (err error) {
@@ -116,14 +115,14 @@ func eachDataNode(topo *master_pb.TopologyInfo, fn func(dc string, rack RackId, 
 }
 
 func sortEcNodesByFreeslotsDecending(ecNodes []*EcNode) {
-	sort.Slice(ecNodes, func(i, j int) bool {
-		return ecNodes[i].freeEcSlot > ecNodes[j].freeEcSlot
+	slices.SortFunc(ecNodes, func(a, b *EcNode) bool {
+		return a.freeEcSlot > b.freeEcSlot
 	})
 }
 
 func sortEcNodesByFreeslotsAscending(ecNodes []*EcNode) {
-	sort.Slice(ecNodes, func(i, j int) bool {
-		return ecNodes[i].freeEcSlot < ecNodes[j].freeEcSlot
+	slices.SortFunc(ecNodes, func(a, b *EcNode) bool {
+		return a.freeEcSlot < b.freeEcSlot
 	})
 }
 
@@ -172,7 +171,7 @@ func countFreeShardSlots(dn *master_pb.DataNodeInfo, diskType types.DiskType) (c
 	if diskInfo == nil {
 		return 0
 	}
-	return int(diskInfo.MaxVolumeCount-diskInfo.ActiveVolumeCount)*erasure_coding.DataShardsCount - countShards(diskInfo.EcShardInfos)
+	return int(diskInfo.MaxVolumeCount-diskInfo.VolumeCount)*erasure_coding.DataShardsCount - countShards(diskInfo.EcShardInfos)
 }
 
 type RackId string
@@ -206,7 +205,7 @@ func collectEcNodes(commandEnv *CommandEnv, selectedDataCenter string) (ecNodes 
 
 	// list all possible locations
 	// collect topology information
-	topologyInfo, _, err := collectTopologyInfo(commandEnv)
+	topologyInfo, _, err := collectTopologyInfo(commandEnv, 0)
 	if err != nil {
 		return
 	}
