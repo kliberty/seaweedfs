@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,10 +51,10 @@ type Filer struct {
 	UniqueFileId        uint32
 }
 
-func NewFiler(masters map[string]pb.ServerAddress, grpcDialOption grpc.DialOption,
-	filerHost pb.ServerAddress, collection string, replication string, dataCenter string, notifyFn func()) *Filer {
+func NewFiler(masters map[string]pb.ServerAddress, grpcDialOption grpc.DialOption, filerHost pb.ServerAddress,
+	filerGroup string, collection string, replication string, dataCenter string, notifyFn func()) *Filer {
 	f := &Filer{
-		MasterClient:        wdclient.NewMasterClient(grpcDialOption, cluster.FilerType, filerHost, dataCenter, masters),
+		MasterClient:        wdclient.NewMasterClient(grpcDialOption, filerGroup, cluster.FilerType, filerHost, dataCenter, masters),
 		fileIdDeletionQueue: util.NewUnboundedQueue(),
 		GrpcDialOption:      grpcDialOption,
 		FilerConf:           NewFilerConf(),
@@ -69,13 +70,33 @@ func NewFiler(masters map[string]pb.ServerAddress, grpcDialOption grpc.DialOptio
 	return f
 }
 
-func (f *Filer) AggregateFromPeers(self pb.ServerAddress) {
+func (f *Filer) MaybeBootstrapFromPeers(self pb.ServerAddress, existingNodes []*master_pb.ClusterNodeUpdate, snapshotTime time.Time) (err error) {
+	if len(existingNodes) == 0 {
+		return
+	}
+	sort.Slice(existingNodes, func(i, j int) bool {
+		return existingNodes[i].CreatedAtNs < existingNodes[j].CreatedAtNs
+	})
+	earliestNode := existingNodes[0]
+	if earliestNode.Address == string(self) {
+		return
+	}
+
+	glog.V(0).Infof("bootstrap from %v", earliestNode.Address)
+	err = pb.FollowMetadata(pb.ServerAddress(earliestNode.Address), f.GrpcDialOption, "bootstrap", int32(f.UniqueFileId), "/", nil,
+		0, snapshotTime.UnixNano(), f.Signature, func(resp *filer_pb.SubscribeMetadataResponse) error {
+			return Replay(f.Store, resp)
+		}, pb.FatalOnError)
+	return
+}
+
+func (f *Filer) AggregateFromPeers(self pb.ServerAddress, existingNodes []*master_pb.ClusterNodeUpdate, startFrom time.Time) {
 
 	f.MetaAggregator = NewMetaAggregator(f, self, f.GrpcDialOption)
 	f.MasterClient.OnPeerUpdate = f.MetaAggregator.OnPeerUpdate
 
-	for _, peerUpdate := range f.ListExistingPeerUpdates() {
-		f.MetaAggregator.OnPeerUpdate(peerUpdate)
+	for _, peerUpdate := range existingNodes {
+		f.MetaAggregator.OnPeerUpdate(peerUpdate, startFrom)
 	}
 
 }
@@ -85,15 +106,17 @@ func (f *Filer) ListExistingPeerUpdates() (existingNodes []*master_pb.ClusterNod
 	if grpcErr := pb.WithMasterClient(false, f.MasterClient.GetMaster(), f.GrpcDialOption, func(client master_pb.SeaweedClient) error {
 		resp, err := client.ListClusterNodes(context.Background(), &master_pb.ListClusterNodesRequest{
 			ClientType: cluster.FilerType,
+			FilerGroup: f.MasterClient.FilerGroup,
 		})
 
 		glog.V(0).Infof("the cluster has %d filers\n", len(resp.ClusterNodes))
 		for _, node := range resp.ClusterNodes {
 			existingNodes = append(existingNodes, &master_pb.ClusterNodeUpdate{
-				NodeType: cluster.FilerType,
-				Address:  node.Address,
-				IsLeader: node.IsLeader,
-				IsAdd:    true,
+				NodeType:    cluster.FilerType,
+				Address:     node.Address,
+				IsLeader:    node.IsLeader,
+				IsAdd:       true,
+				CreatedAtNs: node.CreatedAtNs,
 			})
 		}
 		return err
@@ -103,14 +126,13 @@ func (f *Filer) ListExistingPeerUpdates() (existingNodes []*master_pb.ClusterNod
 	return
 }
 
-func (f *Filer) SetStore(store FilerStore) {
+func (f *Filer) SetStore(store FilerStore) (isFresh bool) {
 	f.Store = NewFilerStoreWrapper(store)
 
-	f.setOrLoadFilerStoreSignature(store)
-
+	return f.setOrLoadFilerStoreSignature(store)
 }
 
-func (f *Filer) setOrLoadFilerStoreSignature(store FilerStore) {
+func (f *Filer) setOrLoadFilerStoreSignature(store FilerStore) (isFresh bool) {
 	storeIdBytes, err := store.KvGet(context.Background(), []byte(FilerStoreId))
 	if err == ErrKvNotFound || err == nil && len(storeIdBytes) == 0 {
 		f.Signature = util.RandomInt32()
@@ -120,12 +142,14 @@ func (f *Filer) setOrLoadFilerStoreSignature(store FilerStore) {
 			glog.Fatalf("set %s=%d : %v", FilerStoreId, f.Signature, err)
 		}
 		glog.V(0).Infof("create %s to %d", FilerStoreId, f.Signature)
+		return true
 	} else if err == nil && len(storeIdBytes) == 4 {
 		f.Signature = int32(util.BytesToUint32(storeIdBytes))
 		glog.V(0).Infof("existing %s = %d", FilerStoreId, f.Signature)
 	} else {
 		glog.Fatalf("read %v=%v : %v", FilerStoreId, string(storeIdBytes), err)
 	}
+	return false
 }
 
 func (f *Filer) GetStore() (store FilerStore) {
