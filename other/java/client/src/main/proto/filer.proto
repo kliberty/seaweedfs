@@ -351,6 +351,7 @@ message GetFilerConfigurationResponse {
     int32 metrics_interval_sec = 10;
     string version = 11;
     string cluster_id = 12;
+    string filer_group = 13;
 }
 
 message SubscribeMetadataRequest {
@@ -360,6 +361,7 @@ message SubscribeMetadataRequest {
     int32 signature = 4;
     repeated string path_prefixes = 6;
     int32 client_id = 7;
+    int64 until_ns = 8;
 }
 message SubscribeMetadataResponse {
     string directory = 1;
