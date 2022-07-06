@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
+
 	"github.com/chrislusf/seaweedfs/weed/stats"
 
 	"google.golang.org/grpc"
@@ -46,6 +48,7 @@ import (
 	_ "github.com/chrislusf/seaweedfs/weed/notification/google_pub_sub"
 	_ "github.com/chrislusf/seaweedfs/weed/notification/kafka"
 	_ "github.com/chrislusf/seaweedfs/weed/notification/log"
+	_ "github.com/chrislusf/seaweedfs/weed/notification/mqtt"
 	"github.com/chrislusf/seaweedfs/weed/security"
 )
 
